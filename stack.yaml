@@ -8,7 +8,6 @@ nix:
     - zlib
   # disable pure by default so that the test enviroment can be passed
   pure: false
-
 extra-deps:
   - configurator-pg-0.2.7
   - git: https://github.com/PostgREST/postgresql-libpq.git
@@ -18,6 +17,5 @@ extra-deps:
   - fuzzyset-0.3.1
   - megaparsec-9.2.2
   - cryptostore-0.3.0.1
-  #- wai-saml2 # to load this module from the local filesystem;
   - git: https://github.com/Gab0/wai-saml2.git
-    commit: f2d4cc5a8b4dd1615b5bf03ef8713fa6ebff8f8d
+    commit: 9761c41b1589359411c0968002dd701648450e37
