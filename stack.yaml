@@ -1,4 +1,4 @@
-resolver: lts-20.6 # 2023-01-09, GHC 9.2.5
+resolver: lts-21.7 # 2023-08-14, GHC 9.4.5
 
 nix:
   packages:
@@ -9,10 +9,13 @@ nix:
   # disable pure by default so that the test enviroment can be passed
   pure: false
 extra-deps:
+  - configurator-pg-0.2.7
   - git: https://github.com/PostgREST/postgresql-libpq.git
     commit: 890a0a16cf57dd401420fdc6c7d576fb696003bc
   - hasql-notifications-0.2.0.6
   - hasql-pool-0.10
+  - fuzzyset-0.3.1
+  - megaparsec-9.2.2
   - cryptostore-0.3.0.1
   #- wai-saml2 # to load this module from the local filesystem;
   - git: https://github.com/Gab0/wai-saml2.git
