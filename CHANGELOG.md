@@ -8,11 +8,13 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 ### Added
 
  - #2887, Add Preference `max-affected` to limit affected resources - @taimoorzaeem
+ - #3171, Add an ability to dump config via admin API - @skywriter
 
 ### Fixed
 
  - #3149, Misleading "Starting PostgREST.." logs on schema cache reloading - @steve-chavez
  - #2815, Build static executable with GSSAPI support - @wolfgangwalther
+ - #3205, Fix wrong subquery error returning a status of 400 Bad Request - @steve-chavez
 
 ### Deprecated
 
