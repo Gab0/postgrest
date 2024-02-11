@@ -52,6 +52,7 @@ import qualified Network.HTTP.Types.Status  as HTTP
 import qualified Network.Socket             as NS
 import qualified PostgREST.Error            as Error
 import           PostgREST.Version          (prettyVersion)
+import           System.TimeIt              (timeItT)
 
 import Control.AutoUpdate (defaultUpdateSettings, mkAutoUpdate,
                            updateAction)
@@ -70,6 +71,8 @@ import Network.Wai.SAML2.Validation      (readSignedCertificate, readPKCS12Certi
 
 import System.IO.Error                   (IOError)
 
+import Numeric (showFFloat)
+
 import PostgREST.Config                  (AppConfig (..),
                                           LogLevel (..),
                                           addFallbackAppName,
@@ -79,8 +82,9 @@ import PostgREST.Config.Database         (queryDbSettings,
                                           queryRoleSettings)
 import PostgREST.Config.PgVersion        (PgVersion (..),
                                           minimumPgVersion)
-import PostgREST.SchemaCache             (SchemaCache,
-                                          querySchemaCache)
+import PostgREST.SchemaCache             (SchemaCache (..),
+                                          querySchemaCache,
+                                          showSummary)
 import PostgREST.SchemaCache.Identifiers (dumpQi)
 import PostgREST.Unix                    (createAndBindDomainSocket)
 
@@ -388,9 +392,9 @@ data SCacheStatus
 loadSchemaCache :: AppState -> IO SCacheStatus
 loadSchemaCache appState = do
   conf@AppConfig{..} <- getConfig appState
-  result <-
+  (resultTime, result) <-
     let transaction = if configDbPreparedStatements then SQL.transaction else SQL.unpreparedTransaction in
-    usePool appState conf . transaction SQL.ReadCommitted SQL.Read $
+    timeItT $ usePool appState conf . transaction SQL.ReadCommitted SQL.Read $
       querySchemaCache conf
   case result of
     Left e -> do
@@ -407,9 +411,13 @@ loadSchemaCache appState = do
           return SCOnRetry
 
     Right sCache -> do
-      putSchemaCache appState (Just sCache)
-      logWithZTime appState "Schema cache loaded"
+      putSchemaCache appState $ Just sCache
+      logWithZTime appState $ "Schema cache queried in " <> showMillis resultTime  <> " milliseconds"
+      logWithZTime appState $ "Schema cache loaded " <> showSummary sCache
       return SCLoaded
+  where
+    showMillis :: Double -> Text
+    showMillis x = toS $ showFFloat (Just 1) (x * 1000) ""
 
 -- | Current database connection status data ConnectionStatus
 data ConnectionStatus
@@ -449,7 +457,7 @@ internalConnectionWorker appState = work
           putPgVersion appState actualPgVersion
           when configDbChannelEnabled $
             signalListener appState
-          logWithZTime appState "Connection successful"
+          logWithZTime appState $ "Successfully connected to " <> pgvFullName actualPgVersion
           -- this could be fail because the connection drops, but the loadSchemaCache will pick the error and retry again
           -- We cannot retry after it fails immediately, because db-pre-config could have user errors. We just log the error and continue.
           when configDbConfig $ reReadConfig False appState
