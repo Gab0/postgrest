@@ -138,11 +138,15 @@ data AppState = AppState
 type AppSockets = (NS.Socket, Maybe NS.Socket)
 
 data SAML2State = SAML2State
-  { saml2StateAppConfig :: SAML2Config
+  { saml2StateAppConfig    :: SAML2Config
   -- | Known assertion IDs, so we can avoid 'replay' attacks.
-  , saml2KnownIds       :: C.Cache Text ()
+  , saml2KnownIds          :: C.Cache Text ()
   -- | PostgREST endpoint that points to a Postgres function that generates JWT tokens.
-  , saml2JwtEndpoint    :: Text
+  , saml2LoginEndpoint     :: Text
+  -- | PostgREST endpoint that listens to logout requests.
+  , saml2LogoutEndpointIn  :: Text
+  -- | PostgREST endpoint that points to a Postgres function that blacklists JWT tokens.
+  , saml2LogoutEndpointOut :: Text
   }
 
 -- | The default SAML2 parameters.
@@ -157,7 +161,9 @@ standardSAML2State = do
     { saml2StateAppConfig = (saml2ConfigNoEncryption pubKey)
       { saml2DisableTimeValidation = False }
     , saml2KnownIds    = knownIds
-    , saml2JwtEndpoint = "/rpc/validate_saml_role"
+    , saml2LoginEndpoint = "/rpc/validate_saml_role"
+    , saml2LogoutEndpointIn = "/sso/logout"
+    , saml2LogoutEndpointOut = "/rpc/logout_user"
     }
 
 -- | Read and process the certificate loaded from the environment variable
