@@ -1,0 +1,58 @@
+name: Docs
+
+on:
+  push:
+    branches:
+    - main
+    - v[0-9]+
+  pull_request:
+    branches:
+    - main
+    - v[0-9]+
+
+jobs:
+  build:
+    name: Build docs
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup Nix Environment
+      uses: ./.github/actions/setup-nix
+      with:
+        tools: docs
+    - run: postgrest-docs-build
+    - run: git diff --exit-code HEAD locales || echo "Please commit changes to the locales/ folder after running postgrest-docs-build."
+
+  spellcheck:
+    name: Run spellcheck
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup Nix Environment
+      uses: ./.github/actions/setup-nix
+      with:
+        tools: docs
+    - run: postgrest-docs-spellcheck
+
+  dictcheck:
+    name: Run dictcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Nix Environment
+        uses: ./.github/actions/setup-nix
+        with:
+          tools: docs
+      - run: postgrest-docs-dictcheck
+
+  linkcheck:
+    name: Run linkcheck
+    if: github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup Nix Environment
+      uses: ./.github/actions/setup-nix
+      with:
+        tools: docs
+    - run: postgrest-docs-linkcheck

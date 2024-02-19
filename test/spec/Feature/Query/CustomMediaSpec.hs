@@ -31,7 +31,7 @@ spec = describe "custom media types" $ do
       request methodGet "/lines" (acceptHdrs "text/plain") ""
         `shouldRespondWith`
         [json| {"code":"PGRST107","details":null,"hint":null,"message":"None of these media types are available: text/plain"} |]
-        { matchStatus  = 415
+        { matchStatus  = 406
         , matchHeaders = [matchContentTypeJson]
         }
 
@@ -115,7 +115,7 @@ spec = describe "custom media types" $ do
         [json|
           {"code":"PGRST107","details":null,"hint":null,"message":"None of these media types are available: text/xml"}
         |]
-        { matchStatus = 415
+        { matchStatus = 406
         , matchHeaders = ["Content-Type" <:> "application/json; charset=utf-8"]
         }
 
@@ -140,7 +140,7 @@ spec = describe "custom media types" $ do
           ""
         `shouldRespondWith`
           [json|{"code":"PGRST107","details":null,"hint":null,"message":"None of these media types are available: text/plain"}|]
-          { matchStatus = 415
+          { matchStatus = 406
           , matchHeaders = ["Content-Type" <:> "application/json; charset=utf-8"]
           }
 
@@ -156,7 +156,7 @@ spec = describe "custom media types" $ do
           (acceptHdrs "application/octet-stream") ""
         `shouldRespondWith`
           [json| {"code":"PGRST107","details":null,"hint":null,"message":"None of these media types are available: application/octet-stream"} |]
-          { matchStatus = 415 }
+          { matchStatus = 406 }
 
     -- TODO SOH (start of heading) is being added to results
     it "works if there's an anyelement aggregate defined" $ do
@@ -230,6 +230,76 @@ spec = describe "custom media types" $ do
         simpleHeaders r `shouldContain` [("Content-Type", "text/csv; charset=utf-8")]
         simpleHeaders r `shouldContain` [("Content-Disposition", "attachment; filename=\"lines.csv\"")]
 
+  -- https://github.com/PostgREST/postgrest/issues/3160
+  context "using select query parameter" $ do
+    it "without select" $ do
+      request methodGet "/projects?id=in.(1,2)" (acceptHdrs "pg/outfunc") ""
+        `shouldRespondWith`
+        [str|(1,"Windows 7",1)
+            |(2,"Windows 10",1)
+            |]
+        { matchStatus  = 200
+        , matchHeaders = ["Content-Type" <:> "pg/outfunc"]
+        }
+
+    it "with fewer columns selected" $ do
+      request methodGet "/projects?id=in.(1,2)&select=id,name" (acceptHdrs "pg/outfunc") ""
+        `shouldRespondWith`
+        [str|(1,"Windows 7")
+            |(2,"Windows 10")
+            |]
+        { matchStatus  = 200
+        , matchHeaders = ["Content-Type" <:> "pg/outfunc"]
+        }
+
+    it "with columns in different order" $ do
+      request methodGet "/projects?id=in.(1,2)&select=name,id,client_id" (acceptHdrs "pg/outfunc") ""
+        `shouldRespondWith`
+        [str|("Windows 7",1,1)
+            |("Windows 10",2,1)
+            |]
+        { matchStatus  = 200
+        , matchHeaders = ["Content-Type" <:> "pg/outfunc"]
+        }
+
+    it "with computed columns" $ do
+      request methodGet "/items?id=in.(1,2)&select=id,always_true" (acceptHdrs "pg/outfunc") ""
+        `shouldRespondWith`
+        [str|(1,t)
+            |(2,t)
+            |]
+        { matchStatus  = 200
+        , matchHeaders = ["Content-Type" <:> "pg/outfunc"]
+        }
+
+    -- TODO: Embeddings should not return JSON. Arrays of record would be much better.
+    it "with embedding" $ do
+      request methodGet "/projects?id=in.(1,2)&select=*,clients(id)" (acceptHdrs "pg/outfunc") ""
+        `shouldRespondWith`
+        [str|(1,"Windows 7",1,"{""id"": 1}")
+            |(2,"Windows 10",1,"{""id"": 1}")
+            |]
+        { matchStatus  = 200
+        , matchHeaders = ["Content-Type" <:> "pg/outfunc"]
+        }
+
+    it "will fail for specific aggregate with fewer columns" $ do
+      request methodGet "/lines?select=id" (acceptHdrs "application/vnd.twkb") ""
+        `shouldRespondWith` 406
+
+    it "will fail for specific aggregate with more columns" $ do
+      request methodGet "/lines?select=id,name,geom,id" (acceptHdrs "application/vnd.twkb") ""
+        `shouldRespondWith` 406
+
+    it "will fail for specific aggregate with columns in different order" $ do
+      request methodGet "/lines?select=name,id,geom" (acceptHdrs "application/vnd.twkb") ""
+        `shouldRespondWith` 406
+
+    -- This is just because it would be hard to detect this case, so we better error in this case, too.
+    it "will fail for specific aggregate with columns in same order" $ do
+      request methodGet "/lines?select=id,name,geom" (acceptHdrs "application/vnd.twkb") ""
+        `shouldRespondWith` 406
+
   context "any media type" $ do
     context "on functions" $ do
       it "returns application/json for */* if not explicitly set" $ do
@@ -279,7 +349,7 @@ spec = describe "custom media types" $ do
           }
 
         request methodGet "/rpc/ret_some_mt" (acceptHdrs "text/csv") ""
-          `shouldRespondWith` 415
+          `shouldRespondWith` 406
 
     context "on tables" $ do
       it "returns application/json for */* if not explicitly set" $ do

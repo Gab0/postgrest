@@ -3550,8 +3550,8 @@ returns "application/vnd.geo2+json" as $$
   select (jsonb_build_object('type', 'FeatureCollection', 'hello', 'world'))::"application/vnd.geo2+json";
 $$ language sql;
 
-drop aggregate if exists test.geo2json_agg(anyelement);
-create aggregate test.geo2json_agg(anyelement) (
+drop aggregate if exists test.geo2json_agg_any(anyelement);
+create aggregate test.geo2json_agg_any(anyelement) (
   initcond = '[]'
 , stype = "application/vnd.geo2+json"
 , sfunc = geo2json_trans
@@ -3714,7 +3714,7 @@ begin
       perform set_config('response.headers', json_build_array(json_build_object('Content-Type', 'app/groucho'))::text, true);
       resp := 'groucho';
     else
-      raise sqlstate 'PT415' using message = 'Unsupported Media Type';
+      raise sqlstate 'PT406' using message = 'Not Acceptable';
   end case;
   return resp;
 end; $$ language plpgsql;
@@ -3755,3 +3755,16 @@ create aggregate test.some_agg (some_numbers) (
 
 create view bad_subquery as
 select * from projects where id = (select id from projects);
+
+-- custom generic mimetype
+create domain "pg/outfunc" as text;
+create function test.outfunc_trans (state text, next anyelement)
+returns "pg/outfunc" as $$
+  select (state || next::text || E'\n')::"pg/outfunc";
+$$ language sql;
+
+create aggregate test.outfunc_agg (anyelement) (
+  initcond = ''
+, stype = "pg/outfunc"
+, sfunc = outfunc_trans
+);
