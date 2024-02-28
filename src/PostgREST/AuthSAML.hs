@@ -23,28 +23,26 @@ import qualified Data.Map              as Map
 import qualified Data.Text             as T
 import           Data.String           (String)
 
-import Network.Wai.SAML2
-    ( saml2Callback,
-      Subject(subjectNameID),
-      NameID(nameIDValue),
-      AssertionAttribute(attributeValue, attributeName),
-      Assertion(assertionSubject, assertionId,
-                assertionAttributeStatement),
-      Result(assertion, response),
-      SAML2Error )
-import Network.Wai.SAML2.Response
-    ( Response(responseSignature), Signature(signatureKeyInfo) )
+import qualified Network.Wai.SAML2     as SAML2
+import qualified Network.Wai.SAML2.Response as SAML2
+import qualified Network.Wai.SAML2.Request  as SAML2
+
+import qualified Network.Wai.SAML2.Validation as SAML2
 
 import qualified Network.Wai           as Wai
-import           Network.HTTP.Types    (status401)
+import qualified Network.Wai.Parse     as Wai
+
+import           Network.HTTP.Types    (status200, status401)
 
 import           PostgREST.AppState    (AppState (..), SAML2State (..))
 
 import           Protolude
+import           Prelude               (lookup)
+
 import           Network.Wai.SAML2.KeyInfo (KeyInfo(keyInfoCertificate))
 
 -- | Different routes a request can take when handled by this middleware.
-data RequestRoute = Logout | Block | Pass
+data RequestRoute = Login | Logout | Block | Pass
 
 -- | Middleware for the SAML2 authentication.
 -- NOTE: Here we block access to Postgres' login endpoint.
@@ -59,18 +57,20 @@ middleware appState app req respond = do
       case matchRequestRoute req samlState of
         -- Whether it is an actual login request or any other request
         -- will be decided downstream by the dedicated SAML2 middleware.
-        Pass -> saml2Callback samlConfig (handleSAML2Result samlState) app req respond
-          where
-            samlConfig = saml2StateAppConfig samlState
-        -- If the user is accessing login/logout RPC functions directly,
-        -- we need to block this request
-        _    -> respond $ respondError "Unauthorized."
+        Pass   -> app req respond
+        Logout -> proceed Logout
+        Login  -> proceed Login
+        _      -> respond $ respondError "Unauthorized."
+
+      where
+        proceed r  = saml2Callback samlState r (handleSAMLLoginResult samlState) app req respond
 
 -- | Match request action
 matchRequestRoute :: Wai.Request -> SAML2State -> RequestRoute
 matchRequestRoute req samlState
+  | p == saml2LoginEndpointIn   samlState = Login
+  | p == saml2LoginEndpointOut  samlState = Block
   | p == saml2LogoutEndpointIn  samlState = Logout
-  | p == saml2LoginEndpoint     samlState = Block
   | p == saml2LogoutEndpointOut samlState = Block
   | otherwise = Pass
   where
@@ -80,6 +80,12 @@ matchRequestRoute req samlState
 respondError :: BL.ByteString -> Wai.Response
 respondError = Wai.responseLBS
     status401
+    [("Content-Type", "text/plain")]
+
+-- | Respond with a SAML2 response.
+_respondSAMLResponse :: BL.ByteString -> Wai.Response
+_respondSAMLResponse = Wai.responseLBS
+    status200
     [("Content-Type", "text/plain")]
 
 -- | For every SAML authentication error,
@@ -130,30 +136,37 @@ renderFormData d = S8.pack $ intercalate "&" $ map renderPair $ Map.toList d
     renderPair (k, v) = k ++ "=" ++ v
 
 -- | Modifies the request according to the results from the SAML2 validation.
-handleSAML2Result :: SAML2State -> Either SAML2Error Result -> Wai.Middleware
-handleSAML2Result samlState result' _app req respond =
+handleSAMLLoginResult :: SAML2State -> Either SAML2.SAML2Error SAML2.Result -> Wai.Middleware
+handleSAMLLoginResult samlState result' app req respond =
   case result' of
     Left err -> respond =<< handleSamlError (show err)
     Right result -> do
-      known_assertion <- tryRetrieveAssertionID samlState (assertionId (assertion result))
+      known_assertion <- tryRetrieveAssertionID samlState (SAML2.assertionId (SAML2.assertion result))
       if known_assertion
       then respond =<< handleSamlError "Replay attack detected."
       else do
           -- NOTE: SAML Authentication success!
           -- Now we pass all the SAML parameters to the JWT endpoint.
           let
-            attributes = extractAttributes $ assertion result
+            attributes = extractAttributes $ SAML2.assertion result
 
           putStrLn ("SAML parameters: " ++ show (Map.toList attributes) :: String)
 
-          req' <- rerouteRequestToAnotherEndpoint req (saml2LoginEndpoint samlState) attributes
-          storeAssertionID samlState (assertionId (assertion result))
-          _app req' respond
+          req' <- rerouteRequestToAnotherEndpoint req (saml2LoginEndpointOut samlState) attributes
+          storeAssertionID samlState (SAML2.assertionId (SAML2.assertion result))
+          app req' respond
   where
-    _readCertificateFromSignature :: Result -> Maybe Text
+    _readCertificateFromSignature :: SAML2.Result -> Maybe Text
     _readCertificateFromSignature result = do
-      keyInfo <- signatureKeyInfo $ responseSignature $ response result
+      keyInfo <- SAML2.signatureKeyInfo $ SAML2.responseSignature $ SAML2.response result
       return $ encodeCertificate $ keyInfoCertificate keyInfo
+
+-- | Handle the SAML2 logout (SLO).
+handleSAMLLogoutResult :: SAML2State -> Text -> Wai.Middleware
+handleSAMLLogoutResult samlState username app req respond = do
+  putStrLn $ "SAML Logout: " ++ show username
+  req' <- rerouteRequestToAnotherEndpoint req (saml2LogoutEndpointOut samlState) $ Map.fromList [(T.pack "name_id", username)]
+  app req' respond
 
 -- | Encode a certificate to be used as a JWT parameter.
 -- Here we encode it as SHA256 because passing the raw certificate
@@ -170,17 +183,17 @@ encodeCertificate = T.pack
 
 -- | Extracts all relevant atrtibutes from the assertion.
 -- This includes all assertion attribute statements along with the name id.
-extractAttributes :: Assertion -> Map Text Text
+extractAttributes :: SAML2.Assertion -> Map Text Text
 extractAttributes assertion' = Map.insert "name_id" name_id attributes
   where
-    simplifyAttribute :: AssertionAttribute -> (Text, Text)
-    simplifyAttribute attr = (attributeName attr, attributeValue attr)
+    simplifyAttribute :: SAML2.AssertionAttribute -> (Text, Text)
+    simplifyAttribute attr = (SAML2.attributeName attr, SAML2.attributeValue attr)
 
     attributes = Map.fromList
                $ map simplifyAttribute
-               $ assertionAttributeStatement assertion'
+               $ SAML2.assertionAttributeStatement assertion'
 
-    name_id = nameIDValue $ subjectNameID $ assertionSubject assertion'
+    name_id = SAML2.nameIDValue $ SAML2.subjectNameID $ SAML2.assertionSubject assertion'
 
 -- | Checks if a given assertion ID is already known.
 tryRetrieveAssertionID :: SAML2State -> Text -> IO Bool
@@ -190,3 +203,63 @@ tryRetrieveAssertionID samlState t =
 -- | Store a known assertion ID in the cache.
 storeAssertionID :: SAML2State -> Text -> IO ()
 storeAssertionID samlState t = C.insert (saml2KnownIds samlState) t ()
+
+-- | Modified SAML2 callback handler.
+saml2Callback :: SAML2State
+              -> RequestRoute
+              -> (Either SAML2.SAML2Error SAML2.Result -> Wai.Middleware)
+              -> Wai.Middleware
+saml2Callback samlState route callback app req sendResponse = do
+  let failure = callback (Left SAML2.InvalidRequest) app req sendResponse
+
+  case route of
+    Pass -> app req sendResponse
+    Block -> failure
+    Login -> do
+      body <- extractRequestBody req
+      -- NOTE: lookup SAMLRequest too? (seems to not be the case)
+      case lookup "SAMLResponse" body of
+          Nothing -> failure
+          Just val -> do
+              let rs = lookup "RelayState" body
+              result <- SAML2.validateResponse (saml2StateAppConfig samlState) val <&>
+                            fmap (\(assertion, response) ->
+                                      SAML2.Result {
+                                          SAML2.assertion = assertion,
+                                          SAML2.relayState = rs,
+                                          SAML2.response = response
+                                      })
+              -- call the callback
+              callback result app req sendResponse
+
+    -- Here we handle the logout requests.
+    --
+    -- FIXME: Logout requests are not validated.
+    -- The signature is not checked!
+    Logout -> do
+      body <- extractRequestBody req
+      case lookup "SAMLRequest" body of
+        -- The request does not contain the expected payload,
+        Nothing -> failure
+        Just val -> do
+            content <- runExceptT $ SAML2.decodeResponse val
+            case content of
+              Left _ -> failure
+              Right (_responseXmlDoc, samlRequest) -> do
+                putStrLn $ "SAMLRequest: " ++ show samlRequest
+                case SAML2.authnRequestNameID $ samlRequest of
+                  Just nameID -> handleSAMLLogoutResult samlState (SAML2.nameIDValue nameID) app req sendResponse
+                  Nothing -> handleSamlError "Logout request does not contain the username." >>= sendResponse
+
+-- | Extracts the request body as a list of parameters.
+extractRequestBody :: Wai.Request -> IO [Wai.Param]
+extractRequestBody req = do
+  -- default request parse options, but do not allow files;
+  -- we are not expecting any
+  let bodyOpts = Wai.setMaxRequestNumFiles 0
+               $ Wai.setMaxRequestFileSize 0
+                 Wai.defaultParseRequestBodyOptions
+
+  -- parse the request
+  (body, _) <- Wai.parseRequestBodyEx bodyOpts Wai.lbsBackEnd req
+  return body
