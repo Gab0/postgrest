@@ -39,7 +39,6 @@ import qualified Data.Cache                 as C
 import           Data.Either.Combinators    (whenLeft)
 import qualified Data.List                  as L
 import qualified Data.Text                  as T (splitOn, pack, unpack)
-import qualified Data.Text.Encoding         as T
 import qualified Data.ByteString.UTF8       as UTF8
 import           Hasql.Connection           (acquire)
 import qualified Hasql.Notifications        as SQL
@@ -67,8 +66,6 @@ import Network.Wai.SAML2  (SAML2Config (..), saml2ConfigNoEncryption)
 import Network.Wai.SAML2.Validation      (readSignedCertificate, readPKCS12Certificate)
 
 import System.IO.Error                   (IOError)
-
-import Numeric (showFFloat)
 
 import PostgREST.Config                  (AppConfig (..),
                                           LogLevel (..),
