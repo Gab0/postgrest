@@ -17,5 +17,5 @@ extra-deps:
   - cryptostore-0.3.0.1
   #- wai-saml2 # to load this module from the local filesystem;
   - git: https://github.com/Gab0/wai-saml2.git
-    commit: f2d4cc5a8b4dd1615b5bf03ef8713fa6ebff8f8d
+    commit: 44a3c3042fc3a76457f562eec4c5b039792c7bd5
   - postgresql-libpq-0.10.0.0
