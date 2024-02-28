@@ -132,9 +132,11 @@ data SAML2State = SAML2State
   { saml2StateAppConfig    :: SAML2Config
   -- | Known assertion IDs, so we can avoid 'replay' attacks.
   , saml2KnownIds          :: C.Cache Text ()
+  -- | New PostgREST endpoint that listens to login requests.
+  , saml2LoginEndpointIn   :: Text
   -- | PostgREST endpoint that points to a Postgres function that generates JWT tokens.
-  , saml2LoginEndpoint     :: Text
-  -- | PostgREST endpoint that listens to logout requests.
+  , saml2LoginEndpointOut  :: Text
+  -- | New PostgREST endpoint that listens to logout requests.
   , saml2LogoutEndpointIn  :: Text
   -- | PostgREST endpoint that points to a Postgres function that blacklists JWT tokens.
   , saml2LogoutEndpointOut :: Text
@@ -151,9 +153,10 @@ standardSAML2State = do
   pure $ SAML2State
     { saml2StateAppConfig = (saml2ConfigNoEncryption pubKey)
       { saml2DisableTimeValidation = False }
-    , saml2KnownIds    = knownIds
-    , saml2LoginEndpoint = "/rpc/validate_saml_role"
-    , saml2LogoutEndpointIn = "/sso/logout"
+    , saml2KnownIds = knownIds
+    , saml2LoginEndpointIn   = "/sso/assert"
+    , saml2LoginEndpointOut  = "/rpc/validate_saml_role"
+    , saml2LogoutEndpointIn  = "/slo/assert"
     , saml2LogoutEndpointOut = "/rpc/logout_user"
     }
 
