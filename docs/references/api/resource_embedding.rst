@@ -178,7 +178,7 @@ The join table determines many-to-many relationships. It must contain foreign ke
 
 The join table is also detected if the composite key has additional columns.
 
-.. code-block:: postgresql
+.. code-block:: postgres
 
   create table roles(
     id int generated always as identity,
@@ -214,7 +214,7 @@ One-to-one relationships are detected in two ways.
 - When the foreign key is a primary key as specified in the :ref:`sample film database <erd_film>`.
 - When the foreign key has a unique constraint.
 
-  .. code-block:: postgresql
+  .. code-block:: postgres
 
     create table technical_specs(
       film_id int references films(id) unique,
@@ -246,7 +246,7 @@ You can manually define relationships by using functions. This is useful for dat
 
 Assuming there's a foreign table ``premieres`` that we want to relate to ``films``.
 
-.. code-block:: postgresql
+.. code-block:: postgres
 
   create foreign table premieres (
     id integer,
@@ -478,7 +478,7 @@ Recursive One-To-One
 
 To get either side of the Recursive One-To-One relationship, create the functions:
 
-.. code-block:: postgresql
+.. code-block:: postgres
 
   create or replace function predecessor(presidents) returns setof presidents rows 1 as $$
     select * from presidents where id = $1.predecessor_id
@@ -530,7 +530,7 @@ Recursive One-To-Many
 
 To get the One-To-Many embedding, that is, the supervisors with their supervisees, create a function like this one:
 
-.. code-block:: postgresql
+.. code-block:: postgres
 
   create or replace function supervisees(employees) returns setof employees as $$
     select * from employees where supervisor_id = $1.id
@@ -562,7 +562,7 @@ Recursive Many-To-One
 Let's take the same ``employees`` table from :ref:`recursive_o2m_embed`.
 To get the Many-To-One relationship, that is, the employees with their respective supervisor, you need to create a function like this one:
 
-.. code-block:: postgresql
+.. code-block:: postgres
 
   create or replace function supervisor(employees) returns setof employees rows 1 as $$
     select * from employees where id = $1.supervisor_id
@@ -614,7 +614,7 @@ Recursive Many-To-Many
 
 To get all the subscribers of a user as well as the ones they're following, define these functions:
 
-.. code-block:: postgresql
+.. code-block:: postgres
 
   create or replace function subscribers(users) returns setof users as $$
     select u.*
@@ -747,16 +747,16 @@ Foreign Key Joins on Chains of Views
 
 Views can also depend on other views, which in turn depend on the actual base table. For PostgREST to pick up those chains recursively to any depth, all the views must be in the search path, so either in the exposed schema (:ref:`db-schemas`) or in one of the schemas set in :ref:`db-extra-search-path`. This does not apply to the base table, which could be in a private schema as well. See :ref:`schema_isolation` for more details.
 
-.. _s_proc_embed:
+.. _function_embed:
 
 Foreign Key Joins on Table-Valued Functions
 ===========================================
 
-If you have a :ref:`Stored Procedure <s_procs>` that returns a table type, you can do a Foreign Key join on the result.
+If you have a :ref:`Function <functions>` that returns a table type, you can do a Foreign Key join on the result.
 
 Here's a sample function (notice the ``RETURNS SETOF films``).
 
-.. code-block:: plpgsql
+.. code-block:: postgres
 
   CREATE FUNCTION getallfilms() RETURNS SETOF films AS $$
     SELECT * FROM films;
@@ -846,11 +846,13 @@ This sorts the list of actors in each film but does *not* change the order of th
 
 Once again, this restricts the roles included to certain characters but does not filter the films in any way. Films without any of those characters would be included along with empty character lists.
 
-An ``or`` filter  can be used for a similar operation:
+An ``or`` filter can be used for a similar operation:
 
 .. code-block:: bash
 
   curl "http://localhost:3000/films?select=*,roles(*)&roles.or=(character.eq.Gummo,character.eq.Zeppo)"
+
+However, this only works for columns inside ``roles``. See :ref:`how to use "or" across multiple resources <or_embed_rels>`.
 
 Limit and offset operations are possible:
 
@@ -950,6 +952,18 @@ Both ``is.null`` and ``not.is.null`` can be included inside the `or` operator. F
 .. code-block:: bash
 
   curl "http://localhost:3000/films?select=title,actors(*),directors(*)&or=(actors.is.null,directors.is.null)"
+
+.. _or_embed_rels:
+
+OR filtering across Embedded Resources
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+You can also use ``not.is.null`` to make an ``or`` filter across multiple resources.
+For instance, to show the films whose actors **or** directors are named John:
+
+.. code-block:: bash
+
+  curl "http://localhost:3000/films?select=title,actors(),directors()&directors.first_name=eq.John&actors.first_name=eq.John&or=(directors.not.is.null,actors.not.is.null)"
 
 .. _empty_embed:
 

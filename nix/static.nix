@@ -23,21 +23,19 @@ let
         enableNativeBignum = true;
       };
 
-      overrides = pkgs.lib.composeExtensions old.overrides (final: prev: {
-        postgresql-libpq = (prev.postgresql-libpq.override {
+      overrides = pkgs.lib.composeExtensions old.overrides (_: prev: {
+        postgresql-libpq = (lib.overrideCabal prev.postgresql-libpq {
+          # TODO: This section can be simplified when this PR has made it's way to us:
+          #  https://github.com/NixOS/nixpkgs/pull/286370
+          # Using use-pkg-config flag, because pg_config won't work when cross-compiling
+          configureFlags = [ "-fuse-pkg-config" ];
           # postgresql doesn't build in the fully static overlay - but the default
           # derivation is built with static libraries anyway.
-          postgresql = pkgsCross.libpq;
-        }).overrideAttrs (finalAttrs: prevAttrs: {
-          # Using use-pkg-config flag, because pg_config won't work when cross-compiling
-          configureFlags = prevAttrs.configureFlags ++ [ "-fuse-pkg-config" ];
-          # Using pkg-config without pkgsCross, because "pkg-config" is hardcoded in
-          # postgresql-libpq's Setup.hs. Using pkgsStatic to make pkg-config return the
-          # static libs for libpq.
-          nativeBuildInputs = prevAttrs.nativeBuildInputs ++ [ pkgs.pkgsStatic.pkg-config ];
-
+          libraryPkgconfigDepends = [ pkgsCross.libpq ];
+          librarySystemDepends = [ ];
+        }).overrideAttrs (_: prevAttrs: {
           buildInputs = prevAttrs.buildInputs ++ [
-            (pkgsStatic.libkrb5.overrideAttrs (finalAttrs: prevAttrs: {
+            (pkgsStatic.libkrb5.overrideAttrs (_: prevAttrs: {
               configureFlags = prevAttrs.configureFlags ++ [
                 "--sysconfdir=/etc"
                 # disable keyutils dependency, to avoid linking errors
@@ -54,7 +52,6 @@ let
     });
 
   makeExecutableStatic = drv: pkgs.lib.pipe drv [
-    (lib.compose.appendConfigureFlags [ "--enable-executable-static" ])
     lib.compose.justStaticExecutables
 
     # To successfully compile a redistributable, fully static executable we need to:

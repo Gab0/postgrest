@@ -11,7 +11,6 @@
 , openssl
 , zlib
 , libkrb5
-, icu
 , postgresql
 , pkg-config
 , tzdata
@@ -19,7 +18,7 @@
 
 stdenv.mkDerivation {
   pname = "libpq";
-  inherit (postgresql) src version;
+  inherit (postgresql) src version patches;
 
   configureFlags = [
     "--without-gssapi"

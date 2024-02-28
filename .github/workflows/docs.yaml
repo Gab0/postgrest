@@ -1,58 +1,67 @@
 name: Docs
 
 on:
-  push:
-    branches:
-    - main
-    - v[0-9]+
+  workflow_call:
+    secrets:
+      CACHIX_AUTH_TOKEN:
+        required: false
   pull_request:
     branches:
-    - main
-    - v[0-9]+
+      - main
+      - v[0-9]+
+    paths:
+      - .github/workflows/docs.yaml
+      - .github/actions/setup-nix/**
+      - default.nix
+      - nix/**
+      - docs/**
+      - '!**.md'
+
+concurrency:
+  # Terminate all previous runs of the same workflow for pull requests
+  group: docs-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   build:
-    name: Build docs
+    name: Build
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4
     - name: Setup Nix Environment
       uses: ./.github/actions/setup-nix
       with:
-        tools: docs
+        authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+        tools: docs.build.bin
     - run: postgrest-docs-build
     - run: git diff --exit-code HEAD locales || echo "Please commit changes to the locales/ folder after running postgrest-docs-build."
 
+
   spellcheck:
-    name: Run spellcheck
+    name: Spellcheck
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4
     - name: Setup Nix Environment
       uses: ./.github/actions/setup-nix
       with:
-        tools: docs
-    - run: postgrest-docs-spellcheck
+        authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+        tools: docs.spellcheck.bin docs.dictcheck.bin
+    - name: Run spellcheck
+      run: postgrest-docs-spellcheck
+    - name: Run dictcheck
+      run: postgrest-docs-dictcheck
 
-  dictcheck:
-    name: Run dictcheck
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup Nix Environment
-        uses: ./.github/actions/setup-nix
-        with:
-          tools: docs
-      - run: postgrest-docs-dictcheck
 
   linkcheck:
-    name: Run linkcheck
+    name: Linkcheck
     if: github.base_ref == 'main'
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4
     - name: Setup Nix Environment
       uses: ./.github/actions/setup-nix
       with:
-        tools: docs
+        authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+        tools: docs.linkcheck.bin
     - run: postgrest-docs-linkcheck

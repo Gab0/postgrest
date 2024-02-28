@@ -21,9 +21,28 @@ import jwt
 import pytest
 import requests
 import requests_unixsocket
+from syrupy.extensions.json import SingleFileSnapshotExtension
 import yaml
 
 from config import *
+
+
+class ExtraNewLinesDumper(yaml.SafeDumper):
+    "Dumper that inserts an extra newline after each top-level item."
+
+    def write_line_break(self, data=None):
+        super().write_line_break(data)
+        if len(self.indents) == 1:
+            super().write_line_break()
+
+
+class YamlSnapshotExtension(SingleFileSnapshotExtension):
+    _file_extension = "yaml"
+
+
+@pytest.fixture
+def snapshot_yaml(snapshot):
+    return snapshot.use_extension(YamlSnapshotExtension)
 
 
 def itemgetter(*items):
@@ -225,3 +244,28 @@ def test_invalid_openapi_mode(invalidopenapimodes, defaultenv):
         for line in dump.split("\n"):
             if line.startswith("openapi-mode"):
                 print(line)
+
+
+# If this test is failing, run pytest with --snapshot-update.
+@pytest.mark.parametrize(
+    "key",
+    [
+        "dbMediaHandlers",
+        "dbRelationships",
+        "dbRepresentations",
+        "dbRoutines",
+        "dbTables",
+        "dbTimezones",
+    ],
+)
+def test_schema_cache_snapshot(baseenv, key, snapshot_yaml):
+    "Dump of schema cache should match snapshot."
+
+    schema_cache = yaml.load(cli(["--dump-schema"], env=baseenv), Loader=yaml.Loader)
+    formatted = yaml.dump(
+        schema_cache[key],
+        encoding="utf8",
+        allow_unicode=True,
+        Dumper=yaml.SafeDumper if key == "dbTimezones" else ExtraNewLinesDumper,
+    )
+    assert formatted == snapshot_yaml

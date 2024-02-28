@@ -22,12 +22,11 @@ The previous tutorial created a :code:`web_anon` role in the database with which
 
   grant usage on schema api to todo_user;
   grant all on api.todos to todo_user;
-  grant usage, select on sequence api.todos_id_seq to todo_user;
 
 Step 2. Make a Secret
 ---------------------
 
-Clients authenticate with the API using JSON Web Tokens. These are JSON objects which are cryptographically signed using a secret known to only us and the server. Because clients do not know this secret, they cannot tamper with the contents of their tokens. PostgREST will detect counterfeit tokens and will reject them.
+Clients authenticate with the API using JSON Web Tokens. These are JSON objects which are cryptographically signed using a secret only known to the server. Because clients do not know this secret, they cannot tamper with the contents of their tokens. PostgREST will detect counterfeit tokens and will reject them.
 
 Let's create a secret and provide it to PostgREST. Think of a nice long one, or use a tool to generate it. **Your secret must be at least 32 characters long.**
 
@@ -67,7 +66,7 @@ Ordinarily your own code in the database or in another server will create and si
 
 .. note::
 
-  While the token may look well obscured, it's easy to reverse engineer the payload. The token is merely signed, not encrypted, so don't put things inside that you don't want a determined client to see.
+  While the token may look well obscured, it's easy to reverse engineer the payload. The token is merely signed, not encrypted, so don't put things inside that you don't want a determined client to see. While it is possible to read the payload of the token, it is not possible to read the secret with which it was signed.
 
 Step 4. Make a Request
 ----------------------
@@ -140,7 +139,7 @@ It's better policy to include an expiration timestamp for tokens using the :code
 
   Epoch time is defined as the number of seconds that have elapsed since 00:00:00 Coordinated Universal Time (UTC), January 1st 1970, minus the number of leap seconds that have taken place since then.
 
-To observe expiration in action, we'll add an :code:`exp` claim of five minutes in the future to our previous token. First find the epoch value of five minutes from now. In psql run this:
+To observe expiration in action, we'll add an :code:`exp` claim of five minutes in the future to our previous token. First find the epoch value of five minutes from now. In :code:`psql` run this:
 
 .. code-block:: postgres
 
@@ -155,7 +154,7 @@ Go back to jwt.io and change the payload to
     "exp": 123456789
   }
 
-**NOTE**: Don't forget to change the dummy epoch value :code:`123456789` in the snippet above to the epoch value returned by the psql command.
+**NOTE**: Don't forget to change the dummy epoch value :code:`123456789` in the snippet above to the epoch value returned by the :code:`psql` command.
 
 Copy the updated token as before, and save it as a new environment variable.
 
@@ -175,9 +174,9 @@ After expiration, the API returns HTTP 401 Unauthorized:
 .. code-block:: json
 
   {
-    "hint": null,
-    "details": null,
     "code": "PGRST301",
+    "details": null,
+    "hint": null,
     "message": "JWT expired"
   }
 
@@ -203,11 +202,11 @@ Save it to an environment variable:
 
   export WAYWARD_TOKEN="<paste new token>"
 
-PostgREST allows us to specify a stored procedure to run during attempted authentication. The function can do whatever it likes, including raising an exception to terminate the request.
+PostgREST allows us to specify a function to run during attempted authentication. The function can do whatever it likes, including raising an exception to terminate the request.
 
 First make a new schema and add the function:
 
-.. code-block:: plpgsql
+.. code-block:: postgres
 
   create schema auth;
   grant usage on schema auth to web_anon, todo_user;
@@ -255,8 +254,8 @@ The server responds with 403 Forbidden:
 .. code-block:: json
 
   {
-    "hint": "Nope, we are on to you",
-    "details": null,
     "code": "42501",
+    "details": null,
+    "hint": "Nope, we are on to you",
     "message": "insufficient_privilege"
   }

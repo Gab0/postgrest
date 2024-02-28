@@ -86,9 +86,9 @@ all           :code:`ALL`               comparison matches all the values in the
 any           :code:`ANY`               comparison matches any value in the list, see :ref:`modifiers`
 ============  ========================  ==================================================================================
 
-For more complicated filters you will have to create a new view in the database, or use a stored procedure. For instance, here's a view to show "today's stories" including possibly older pinned stories:
+For more complicated filters you will have to create a new view in the database, or use a function. For instance, here's a view to show "today's stories" including possibly older pinned stories:
 
-.. code-block:: postgresql
+.. code-block:: postgres
 
   CREATE VIEW fresh_stories AS
   SELECT *
@@ -294,6 +294,21 @@ Note that ``->>`` is used to compare ``blood_type`` as ``text``. To compare with
     { "id": 12, "age": 30 },
     { "id": 15, "age": 35 }
   ]
+
+Ordering is also supported:
+
+.. code-block:: bash
+
+  curl "http://localhost:3000/people?select=id,json_data->age&order=json_data->>age.desc"
+
+.. code-block:: json
+
+  [
+    { "id": 15, "age": 35 },
+    { "id": 12, "age": 30 },
+    { "id": 11, "age": 25 }
+  ]
+
 .. _composite_array_columns:
 
 Composite / Array Columns
@@ -397,7 +412,7 @@ To create a row in a database table post a JSON object whose keys are the names 
 
   HTTP/1.1 201 Created
 
-No response body will be returned by default but you can use :ref:`prefer_return` to get the affected resource.
+No response body will be returned by default but you can use :ref:`prefer_return` to get the affected resource and :ref:`resource_embedding` to add related resources.
 
 x-www-form-urlencoded
 ---------------------
@@ -428,7 +443,7 @@ URL encoded payloads can be posted with ``Content-Type: application/x-www-form-u
 
   It's recommended that you `use triggers instead of rules <https://wiki.postgresql.org/wiki/Don%27t_Do_This#Don.27t_use_rules>`_.
   Insertion on views with complex `rules <https://www.postgresql.org/docs/current/sql-createrule.html>`_ might not work out of the box with PostgREST due to its usage of CTEs.
-  If you want to keep using rules, a workaround is to wrap the view insertion in a stored procedure and call it through the :ref:`s_procs` interface.
+  If you want to keep using rules, a workaround is to wrap the view insertion in a function and call it through the :ref:`functions` interface.
   For more details, see this `github issue <https://github.com/PostgREST/postgrest/issues/1283>`_.
 
 .. _bulk_insert:
@@ -546,7 +561,7 @@ To update a row or rows in a table, use the PATCH verb. Use :ref:`h_filter` to s
     -X PATCH -H "Content-Type: application/json" \
     -d '{ "category": "child" }'
 
-Updates also support :ref:`prefer_return` plus :ref:`v_filter`.
+Updates also support :ref:`prefer_return`, :ref:`resource_embedding` and :ref:`v_filter`.
 
 .. warning::
 
@@ -625,7 +640,7 @@ To delete rows in a table, use the DELETE verb plus :ref:`h_filter`. For instanc
 
   curl "http://localhost:3000/user?active=is.false" -X DELETE
 
-Deletions also support :ref:`prefer_return` plus :ref:`v_filter`.
+Deletions also support :ref:`prefer_return`, :ref:`resource_embedding` and :ref:`v_filter`.
 
 .. code-block:: bash
 

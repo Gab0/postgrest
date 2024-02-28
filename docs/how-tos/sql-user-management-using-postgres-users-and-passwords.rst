@@ -31,7 +31,7 @@ As in :ref:`sql_user_management`, we create a :code:`basic_auth` schema:
   -- We put things inside the basic_auth schema to hide
   -- them from public view. Certain public procs/views will
   -- refer to helpers and tables inside.
-  CREATE SCHEMA IF NOT EXISTS basic_auth;
+  CREATE SCHEMA basic_auth;
 
 
 As in :ref:`sql_user_management`, we create the :code:`pgcrypto` and :code:`pgjwt` extensions. Here we prefer to put the extensions in its own schemas:
@@ -40,7 +40,7 @@ As in :ref:`sql_user_management`, we create the :code:`pgcrypto` and :code:`pgjw
 
   CREATE SCHEMA ext_pgcrypto;
   ALTER SCHEMA ext_pgcrypto OWNER TO postgres;
-  CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA ext_pgcrypto;
+  CREATE EXTENSION pgcrypto WITH SCHEMA ext_pgcrypto;
 
 
 Concerning the `pgjwt extension <https://github.com/michelp/pgjwt>`_, please cf. to :ref:`client_auth`.
@@ -49,12 +49,12 @@ Concerning the `pgjwt extension <https://github.com/michelp/pgjwt>`_, please cf.
 
   CREATE SCHEMA ext_pgjwt;
   ALTER SCHEMA ext_pgjwt OWNER TO postgres;
-  CREATE EXTENSION IF NOT EXISTS pgjwt WITH SCHEMA ext_pgjwt;
+  CREATE EXTENSION pgjwt WITH SCHEMA ext_pgjwt;
 
 
 In order to be able to work with postgres' SCRAM-SHA-256 password hashes, we also need the PBKDF2 key derivation function. Luckily there is `a PL/pgSQL implementation on stackoverflow <https://stackoverflow.com/a/72805848>`_:
 
-.. code-block:: plpgsql
+.. code-block:: postgres
 
   CREATE FUNCTION basic_auth.pbkdf2(salt bytea, pw text, count integer, desired_length integer, algorithm text) RETURNS bytea
       LANGUAGE plpgsql IMMUTABLE
@@ -117,10 +117,10 @@ In order to be able to work with postgres' SCRAM-SHA-256 password hashes, we als
   ALTER FUNCTION basic_auth.pbkdf2(salt bytea, pw text, count integer, desired_length integer, algorithm text) OWNER TO postgres;
 
 
-Analogous to :ref:`sql_user_management` creates the function :code:`basic_auth.user_role`, we create a helper function to check the user's password, here with another name and signature (since we want the username, not an email address).
+Analogous to how :ref:`sql_user_management` creates the function :code:`basic_auth.user_role`, we create a helper function to check the user's password, here with another name and signature (since we want the username, not an email address).
 But contrary to :ref:`sql_user_management`, this function does not use a dedicated :code:`users` table with passwords, but instead utilizes the built-in table `pg_catalog.pg_authid <https://www.postgresql.org/docs/current/catalog-pg-authid.html>`_:
 
-.. code-block:: plpgsql
+.. code-block:: postgres
 
   CREATE FUNCTION basic_auth.check_user_pass(username text, password text) RETURNS name
       LANGUAGE sql
@@ -160,22 +160,17 @@ Logins
 As described in :ref:`client_auth`, we'll create a JWT token inside our login function. Note that you'll need to adjust the secret key which is hard-coded in this example to a secure (at least thirty-two character) secret of your choosing.
 
 
-.. code-block:: plpgsql
-
-  CREATE TYPE basic_auth.jwt_token AS (
-    token text
-  );
+.. code-block:: postgres
 
   -- if you are not using psql, you need to replace :DBNAME with the current database's name.
   ALTER DATABASE :DBNAME SET "app.jwt_secret" to 'reallyreallyreallyreallyverysafe';
 
 
-  CREATE FUNCTION public.login(username text, password text) RETURNS basic_auth.jwt_token
+  CREATE FUNCTION public.login(username text, password text, OUT token text)
       LANGUAGE plpgsql security definer
       AS $$
   DECLARE
     _role name;
-    result basic_auth.jwt_token;
   BEGIN
     -- check email and password
     SELECT basic_auth.check_user_pass(username, password) INTO _role;
@@ -190,8 +185,7 @@ As described in :ref:`client_auth`, we'll create a JWT token inside our login fu
         SELECT login.username as role,
           extract(epoch FROM now())::integer + 60*60 AS exp
       ) r
-      INTO result;
-    RETURN result;
+      INTO token;
   END;
   $$;
 

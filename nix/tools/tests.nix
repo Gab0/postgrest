@@ -41,6 +41,8 @@ let
         withEnv = postgrest.env;
       }
       ''
+        # This makes nix-env -iA tests.doctests.bin work.
+        export NIX_GHC=${postgrest.env.NIX_GHC}
         ${cabal-install}/bin/cabal v2-run ${devCabalOptions} test:doctests
       '';
 
@@ -67,6 +69,7 @@ let
       ps.pyyaml
       ps.requests
       ps.requests-unixsocket
+      ps.syrupy
     ]);
 
   testIO =
@@ -192,14 +195,14 @@ in
 buildToolbox
 {
   name = "postgrest-tests";
-  tools =
-    [
+  tools = {
+    inherit
       testSpec
       testDoctests
       testSpecIdempotence
       testIO
       dumpSchema
       coverage
-      coverageDraftOverlay
-    ];
+      coverageDraftOverlay;
+  };
 }

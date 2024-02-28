@@ -2,12 +2,11 @@
 , cabal-install
 , cachix
 , checkedShellScript
+, curl
 , devCabalOptions
 , entr
 , git
-, gnugrep
 , graphviz
-, haskellPackages
 , hsie
 , nix
 , silver-searcher
@@ -288,19 +287,45 @@ let
         ${hsieMinimalImports} graph-symbols | ${graphviz}/bin/dot -Tpng -o "$_arg_outfile"
       '';
 
+  parallelCurl =
+    checkedShellScript
+      {
+        name = "parallel-curl";
+        docs = "wrapper for using <num> parallel curl requests on the same <host>";
+        args = [
+          "ARG_POSITIONAL_SINGLE([num], [number of parallel requests])"
+          "ARG_POSITIONAL_SINGLE([host], [host])"
+          "ARG_LEFTOVERS([extra arguments for curl])"
+        ];
+      }
+      ''
+        curl_command="${curl}/bin/curl --parallel --parallel-immediate "
+        curl_command+="''${_arg_leftovers[*]} "
+
+        x=1
+        while [ $x -le "$1" ]
+        do
+          curl_command+="$_arg_host "
+          x=$((x + 1))
+        done
+
+        eval "$curl_command"
+      '';
+
 in
 buildToolbox
 {
   name = "postgrest-dev";
-  tools = [
-    watch
-    pushCachix
-    check
-    gitHooks
-    dumpMinimalImports
-    hsieMinimalImports
-    hsieGraphModules
-    hsieGraphSymbols
-  ];
-  extra = { inherit pushCachix; };
+  tools = {
+    inherit
+      check
+      dumpMinimalImports
+      gitHooks
+      hsieGraphModules
+      hsieGraphSymbols
+      hsieMinimalImports
+      parallelCurl
+      pushCachix
+      watch;
+  };
 }

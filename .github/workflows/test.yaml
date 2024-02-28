@@ -1,0 +1,134 @@
+name: Test
+
+on:
+  workflow_call:
+    secrets:
+      CACHIX_AUTH_TOKEN:
+        required: false
+      CODECOV_TOKEN:
+        required: false
+  pull_request:
+    branches:
+      - main
+      - v[0-9]+
+    paths:
+      - .github/workflows/test.yaml
+      - .github/workflows/report.yaml
+      - .github/actions/setup-nix/**
+      - default.nix
+      - nix/**
+      - .stylish-haskell.yaml
+      - cabal.project
+      - postgrest.cabal
+      - '**.hs'
+      - test/**
+      - '!**.md'
+
+concurrency:
+  # Terminate all previous runs of the same workflow for pull requests
+  group: test-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # Hack for enabling color output, see:
+        # https://github.com/actions/runner/issues/241#issuecomment-842566950
+        shell: script -qec "bash --noprofile --norc -eo pipefail {0}"
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4
+      - name: Setup Nix Environment
+        uses: ./.github/actions/setup-nix
+        with:
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+          tools: tests.coverage.bin tests.testDoctests.bin tests.testSpecIdempotence.bin
+
+      - name: Run coverage (IO tests and Spec tests against PostgreSQL 15)
+        run: postgrest-coverage
+      - name: Upload coverage to codecov
+        uses: codecov/codecov-action@54bcd8715eee62d40e33596ef5e8f0f48dbbccab # v4.1.0
+        with:
+          files: ./coverage/codecov.json
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Run doctests
+        if: always()
+        run: postgrest-test-doctests
+
+      - name: Check the spec tests for idempotence
+        if: always()
+        run: postgrest-test-spec-idempotence
+
+
+  postgres:
+    strategy:
+      fail-fast: false
+      matrix:
+        pgVersion: ["9_6", 10, 11, 12, 13, 14, 15, 16]
+    name: PG ${{ matrix.pgVersion }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # Hack for enabling color output, see:
+        # https://github.com/actions/runner/issues/241#issuecomment-842566950
+        shell: script -qec "bash --noprofile --norc -eo pipefail {0}"
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4
+      - name: Setup Nix Environment
+        uses: ./.github/actions/setup-nix
+        with:
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+          tools: tests.testSpec.bin tests.testIO.bin withTools.postgresql-${{ matrix.pgVersion }}.bin
+
+      - name: Run spec tests
+        if: always()
+        run: postgrest-with-postgresql-${{ matrix.pgVersion }} postgrest-test-spec
+
+      - name: Run IO tests
+        if: always()
+        run: postgrest-with-postgresql-${{ matrix.pgVersion }} postgrest-test-io -vv
+
+
+  memory:
+    name: Memory
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4
+      - name: Setup Nix Environment
+        uses: ./.github/actions/setup-nix
+        with:
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+          tools: memory.test.bin
+      - name: Run memory tests
+        run: postgrest-test-memory
+
+
+  loadtest:
+    name: Loadtest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4
+        with:
+          fetch-depth: 0
+      - name: Setup Nix Environment
+        uses: ./.github/actions/setup-nix
+        with:
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+          tools: loadtest.loadtestAgainst.bin loadtest.report.bin
+      - uses: WyriHaximus/github-action-get-previous-tag@04e8485ecb6487243907e330d522ff60f02283ce # v1.4.0
+        id: get-latest-tag
+        with:
+          prefix: v
+      - name: Run loadtest
+        run: |
+          postgrest-loadtest-against main ${{ steps.get-latest-tag.outputs.tag }}
+          postgrest-loadtest-report > loadtest/loadtest.md
+      - name: Upload report
+        uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # v4
+        with:
+          name: loadtest.md
+          path: loadtest/loadtest.md
+          if-no-files-found: error

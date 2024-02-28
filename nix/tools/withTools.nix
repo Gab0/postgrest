@@ -1,10 +1,6 @@
-{ bash-completion
-, buildToolbox
-, cabal-install
-, cabalTools
+{ buildToolbox
 , checkedShellScript
 , curl
-, devCabalOptions
 , git
 , lib
 , postgresqlVersions
@@ -89,8 +85,8 @@ let
           log "Creating a minimally privileged $PGUSER connection role..."
           createuser "$PGUSER" -U postgres --host="$tmpdir/socket" --no-createdb --no-inherit --no-superuser --no-createrole --no-replication --login
 
-          echo "${commandName}: You can connect with: psql 'postgres:///$PGDATABASE?host=$tmpdir/socket' -U postgres"
-          echo "${commandName}: You can tail the logs with: tail -f $tmpdir/db.log"
+          >&2 echo "${commandName}: You can connect with: psql 'postgres:///$PGDATABASE?host=$tmpdir/socket' -U postgres"
+          >&2 echo "${commandName}: You can tail the logs with: tail -f $tmpdir/db.log"
         fi
 
         if test "$_arg_fixtures"; then
@@ -143,10 +139,7 @@ let
       }
       (lib.concatStringsSep "\n\n" runners);
 
-  # Create a `postgrest-with-postgresql-` for each PostgreSQL version
-  withPgVersions = builtins.map withTmpDb postgresqlVersions;
-
-  withPg = builtins.head withPgVersions;
+  withPg = withTmpDb (builtins.head postgresqlVersions);
 
   withSlowPg =
     checkedShellScript
@@ -276,30 +269,6 @@ let
         log-level="$(PGRST_LOG_LEVEL)"
       '';
 
-  waitForPgrstPid =
-    checkedShellScript
-      {
-        name = "postgrest-wait-for-pgrst-pid";
-        docs = "Wait for PostgREST to be running. Needs to be a separate command for timeout to work below.";
-        args = [
-          "ARG_USE_ENV([PGRST_SERVER_UNIX_SOCKET], [], [Unix socket to check for running PostgREST instance])"
-        ];
-      }
-      ''
-        # ARG_USE_ENV only adds defaults or docs for environment variables
-        # We manually implement a required check here
-        # See also: https://github.com/matejak/argbash/issues/80
-        : "''${PGRST_SERVER_UNIX_SOCKET:?PGRST_SERVER_UNIX_SOCKET is required}"
-
-        until [ -S "$PGRST_SERVER_UNIX_SOCKET" ]
-        do
-          sleep 0.1
-        done
-
-        # return pid of postgrest process
-        lsof -t -c '/^postgrest$/' "$PGRST_SERVER_UNIX_SOCKET"
-      '';
-
   waitForPgrstReady =
     checkedShellScript
       {
@@ -322,31 +291,6 @@ let
         while [[ "$(check_status)" != "200" ]];
            do sleep 0.1;
         done
-      '';
-
-  parallelCurl =
-    checkedShellScript
-      {
-        name = "parallel-curl";
-        docs = "wrapper for using <num> parallel curl requests on the same <host>";
-        args = [
-          "ARG_POSITIONAL_SINGLE([num], [number of parallel requests])"
-          "ARG_POSITIONAL_SINGLE([host], [host])"
-          "ARG_LEFTOVERS([extra arguments for curl])"
-        ];
-      }
-      ''
-        curl_command="${curl}/bin/curl --parallel --parallel-immediate "
-        curl_command+="''${_arg_leftovers[*]} "
-
-        x=1
-        while [ $x -le "$1" ]
-        do
-          curl_command+="$_arg_host "
-          x=$((x + 1))
-        done
-
-        eval "$curl_command"
       '';
 
   withPgrst =
@@ -406,7 +350,17 @@ in
 buildToolbox
 {
   name = "postgrest-with";
-  tools = [ withPgAll withGit withPgrst withSlowPg withSlowPgrst parallelCurl ] ++ withPgVersions;
-  # make withTools available for other nix files
-  extra = { inherit withGit withPg withPgAll withPgrst withSlowPg withSlowPgrst; };
+  tools = {
+    inherit
+      withGit
+      withPgAll
+      withPgrst
+      withSlowPg
+      withSlowPgrst;
+  } // builtins.listToAttrs (
+    # Create a `postgrest-with-postgresql-` for each PostgreSQL version
+    builtins.map (pg: { inherit (pg) name; value = withTmpDb pg; }) postgresqlVersions
+  );
+  # make latest withPg available for other nix files
+  extra = { inherit withPg; };
 }

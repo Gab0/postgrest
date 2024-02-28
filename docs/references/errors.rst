@@ -173,7 +173,7 @@ Related to the HTTP request elements.
 |               |             | See :ref:`h_filter`, :ref:`operators` and :ref:`ordering`.  |
 | PGRST100      |             |                                                             |
 +---------------+-------------+-------------------------------------------------------------+
-| .. _pgrst101: | 405         | For :ref:`functions <s_procs>`, only ``GET`` and ``POST``   |
+| .. _pgrst101: | 405         | For :ref:`functions <functions>`, only ``GET`` and ``POST`` |
 |               |             | verbs are allowed. Any other verb will throw this error.    |
 | PGRST101      |             |                                                             |
 +---------------+-------------+-------------------------------------------------------------+
@@ -337,9 +337,9 @@ You can customize the errors by using the `RAISE statement <https://www.postgres
 RAISE errors with HTTP Status Codes
 -----------------------------------
 
-Custom status codes can be done by raising SQL exceptions inside :ref:`functions <s_procs>`. For instance, here's a saucy function that always responds with an error:
+Custom status codes can be done by raising SQL exceptions inside :ref:`functions <functions>`. For instance, here's a saucy function that always responds with an error:
 
-.. code-block:: postgresql
+.. code-block:: postgres
 
   CREATE OR REPLACE FUNCTION just_fail() RETURNS void
     LANGUAGE plpgsql
@@ -366,7 +366,7 @@ One way to customize the HTTP status code is by raising particular exceptions ac
 
 For even greater control of the HTTP status code, raise an exception of the ``PTxyz`` type. For instance to respond with HTTP 402, raise ``PT402``:
 
-.. code-block:: sql
+.. code-block:: postgres
 
   RAISE sqlstate 'PT402' using
     message = 'Payment Required',
@@ -394,7 +394,7 @@ Add HTTP Headers with RAISE
 
 For full control over headers and status you can raise a ``PGRST`` SQLSTATE error. You can achieve this by adding the ``code``, ``message``, ``detail`` and ``hint`` in the PostgreSQL error message field as a JSON object. Here, the ``details`` and ``hint`` are optional. Similarly, the ``status`` and ``headers`` must be added to the SQL error detail field as a JSON object. For instance:
 
-.. code-block:: sql
+.. code-block:: postgres
 
   RAISE sqlstate 'PGRST' USING
       message = '{"code":"123","message":"Payment Required","details":"Quota exceeded","hint":"Upgrade your plan"}',
@@ -418,7 +418,7 @@ Returns:
 
 For non standard HTTP status, you can optionally add ``status_text`` to describe the status code. For status code ``419`` the detail field may look like this:
 
-.. code-block:: sql
+.. code-block:: postgres
 
   detail = '{"status":419,"status_text":"Page Expired","headers":{"X-Powered-By":"Nerd Rage"}}';
 

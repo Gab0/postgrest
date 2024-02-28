@@ -80,7 +80,7 @@ You can also configure the server with database settings by using a :ref:`pre-co
 
   PGRST_DB_PRE_CONFIG = "postgrest.pre_config"
 
-.. code-block:: postgresql
+.. code-block:: postgres
 
   -- create a dedicated schema, hidden from the API
   create schema postgrest;
@@ -292,7 +292,7 @@ db-extra-search-path
   **In-Database** pgrst.db_extra_search_path
   =============== ==========================
 
-  Extra schemas to add to the `search_path <https://www.postgresql.org/docs/current/ddl-schemas.html#DDL-SCHEMAS-PATH>`_ of every request. These schemas tables, views and stored procedures **don't get API endpoints**, they can only be referred from the database objects inside your :ref:`db-schemas`.
+  Extra schemas to add to the `search_path <https://www.postgresql.org/docs/current/ddl-schemas.html#DDL-SCHEMAS-PATH>`_ of every request. These schemas tables, views and functions **don't get API endpoints**, they can only be referred from the database objects inside your :ref:`db-schemas`.
 
   This parameter was meant to make it easier to use **PostgreSQL extensions** (like PostGIS) that are outside of the :ref:`db-schemas`.
 
@@ -313,7 +313,7 @@ db-max-rows
 
   *For backwards compatibility, this config parameter is also available without prefix as "max-rows".*
 
-  A hard limit to the number of rows PostgREST will fetch from a view, table, or stored procedure. Limits payload size for accidental or malicious requests.
+  A hard limit to the number of rows PostgREST will fetch from a view, table, or function. Limits payload size for accidental or malicious requests.
 
 .. _db-plan-enabled:
 
@@ -424,7 +424,7 @@ db-pre-request
 
   *For backwards compatibility, this config parameter is also available without prefix as "pre-request".*
 
-  A schema-qualified stored procedure name to call right after the :ref:`tx_settings` are set. See :ref:`pre-request`.
+  A schema-qualified function name to call right after the :ref:`tx_settings` are set. See :ref:`pre-request`.
 
 .. _db-prepared-statements:
 
@@ -568,6 +568,10 @@ jwt-aud
   =============== =================================
 
   Specifies the `JWT audience claim <https://datatracker.ietf.org/doc/html/rfc7519#section-4.1.3>`_. If this claim is present in the client provided JWT then you must set this to the same value as in the JWT, otherwise verifying the JWT will fail.
+
+  .. warning::
+
+     Using this setting will only reject tokens with a different audience claim. Tokens **without** audience claim will still be accepted.
 
 .. _jwt-role-claim-key:
 

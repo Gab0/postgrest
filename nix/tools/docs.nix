@@ -2,8 +2,10 @@
 , aspellDicts
 , buildToolbox
 , checkedShellScript
+, imagemagick
 , python3
 , python3Packages
+, texlive
 , writers
 }:
 let
@@ -54,6 +56,19 @@ let
 
           build html "../.docs-build/html/$_arg_language" -D "language=$_arg_language"
         fi
+      '';
+
+  render =
+    checkedShellScript
+      {
+        name = "postgrest-docs-render";
+        docs = "Render the diagrams.";
+        workingDir = "/docs/_diagrams";
+        withTmpDir = true;
+      }
+      ''
+        ${texlive.combined.scheme-full}/bin/pdflatex -halt-on-error -output-directory="$tmpdir" db.tex
+        ${imagemagick}/bin/convert -density 300 "$tmpdir/db.pdf" ../_static/db.png
       '';
 
   server =
@@ -159,13 +174,14 @@ in
 buildToolbox
 {
   name = "postgrest-docs";
-  tools =
-    [
+  tools = {
+    inherit
       build
       check
       dictcheck
       linkcheck
+      render
       serve
-      spellcheck
-    ];
+      spellcheck;
+  };
 }

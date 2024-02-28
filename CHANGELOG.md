@@ -10,7 +10,8 @@ This project adheres to [Semantic Versioning](http://semver.org/).
  - #2887, Add Preference `max-affected` to limit affected resources - @taimoorzaeem
  - #3171, Add an ability to dump config via admin API - @skywriter
  - #3061, Apply all function settings as transaction-scoped settings - @taimoorzaeem
- - #3171, Log schema cache stats to stderr - @steve-chavez
+ - #3171, #3046, Log schema cache stats to stderr - @steve-chavez
+ - #3210, Dump schema cache through admin API - @taimoorzaeem
 
 ### Fixed
 
@@ -19,6 +20,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
  - #3205, Fix wrong subquery error returning a status of 400 Bad Request - @steve-chavez
  - #3224, Return status code 406 for non-accepted media type instead of code 415 - @wolfgangwalther
  - #3160, Fix using select= query parameter for custom media type handlers - @wolfgangwalther
+ - #3237, Dump media handlers and timezones with --dump-schema - @wolfgangwalther
 
 ### Deprecated
 
@@ -78,6 +80,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
  - Removed `application/octet-stream`, `text/plain`, `text/xml` [builtin support for scalar results](https://postgrest.org/en/v11.1/references/api/resource_representation.html#scalar-function-response-format) - @steve-chavez
  - Removed default `application/openapi+json` media type for [db-root-spec](https://postgrest.org/en/v11.1/references/configuration.html#db-root-spec) - @steve-chavez
  - Removed [db-use-legacy-gucs](https://postgrest.org/en/v11.2/references/configuration.html#db-use-legacy-gucs) - @laurenceisla
+   + All PostgreSQL versions now use GUCs in JSON format for [Headers, Cookies and JWT claims](https://postgrest.org/en/v12/references/transactions.html#request-headers-cookies-and-jwt-claims).
 
 ## [11.2.2] - 2023-10-25
 

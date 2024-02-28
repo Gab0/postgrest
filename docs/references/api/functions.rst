@@ -1,20 +1,24 @@
-.. _s_procs:
+.. _functions:
 
-Stored Procedures
-=================
+Functions as RPC
+================
 
-*"A single resource can be the equivalent of a database stored procedure, with the power to abstract state changes over any number of storage items"* -- `Roy T. Fielding <http://roy.gbiv.com/untangled/2008/rest-apis-must-be-hypertext-driven#comment-743>`_
+*"A single resource can be the equivalent of a database function, with the power to abstract state changes over any number of storage items"* -- `Roy T. Fielding <http://roy.gbiv.com/untangled/2008/rest-apis-must-be-hypertext-driven#comment-743>`_
 
-Procedures can perform any operations allowed by PostgreSQL (read data, modify data, :ref:`raise errors <raise_error>`, and even DDL operations). Every stored procedure in the :ref:`exposed schema <schemas>` and accessible by the :ref:`active database role <roles>` is executable under the :code:`/rpc` prefix.
+Function can perform any operations allowed by PostgreSQL (read data, modify data, :ref:`raise errors <raise_error>`, and even DDL operations). Every function in the :ref:`exposed schema <schemas>` and accessible by the :ref:`active database role <roles>` is executable under the :code:`/rpc` prefix.
 
-If they return table types, Stored Procedures can:
+If they return table types, functions can:
 
 - Use all the same :ref:`read filters as Tables and Views <read>` (horizontal/vertical filtering, counts, limits, etc.).
-- Use :ref:`Resource Embedding <s_proc_embed>`, if the returned table type has relationships to other tables.
+- Use :ref:`Resource Embedding <function_embed>`, if the returned table type has relationships to other tables.
 
 .. note::
 
   Why the ``/rpc`` prefix? PostgreSQL allows a table or view to have the same name as a function. The prefix allows us to avoid routes collisions.
+
+.. warning::
+
+  `Stored Procedures <https://www.postgresql.org/docs/current/xproc.html>`_ are not supported.
 
 Calling with POST
 -----------------
@@ -23,7 +27,7 @@ To supply arguments in an API call, include a JSON object in the request payload
 
 For instance, assume we have created this function in the database.
 
-.. code-block:: plpgsql
+.. code-block:: postgres
 
   CREATE FUNCTION add_them(a integer, b integer)
   RETURNS integer AS $$
@@ -65,7 +69,7 @@ If the function doesn't modify the database, it will also run under the GET meth
 
 The function parameter names match the JSON object keys in the POST case, for the GET case they match the query parameters ``?a=1&b=2``.
 
-.. _s_proc_single_json:
+.. _function_single_json:
 
 Functions with a single unnamed JSON parameter
 ----------------------------------------------
@@ -73,7 +77,7 @@ Functions with a single unnamed JSON parameter
 If you want the JSON request body to be sent as a single argument, you can create a function with a single unnamed ``json`` or ``jsonb`` parameter.
 For this the ``Content-Type: application/json`` header must be included in the request.
 
-.. code-block:: plpgsql
+.. code-block:: postgres
 
   CREATE FUNCTION mult_them(json) RETURNS int AS $$
     SELECT ($1->>'x')::int * ($1->>'y')::int
@@ -97,7 +101,7 @@ For this the ``Content-Type: application/json`` header must be included in the r
 
  Sending the JSON request body as a single argument is also possible with :ref:`Prefer: params=single-object <prefer_params>` but this method is **deprecated**.
 
-.. _s_proc_single_unnamed:
+.. _function_single_unnamed:
 
 Functions with a single unnamed parameter
 -----------------------------------------
@@ -108,7 +112,7 @@ To send raw XML, the parameter type must be ``xml`` and the header ``Content-Typ
 
 To send raw binary, the parameter type must be ``bytea`` and the header ``Content-Type: application/octet-stream`` must be included in the request.
 
-.. code-block:: plpgsql
+.. code-block:: postgres
 
   CREATE TABLE files(blob bytea);
 
@@ -130,7 +134,7 @@ To send raw binary, the parameter type must be ``bytea`` and the header ``Conten
 
 To send raw text, the parameter type must be ``text`` and the header ``Content-Type: text/plain`` must be included in the request.
 
-.. _s_procs_array:
+.. _functions_array:
 
 Functions with array parameters
 -------------------------------
@@ -172,7 +176,7 @@ as in ``{1,2,3,4}``. Note that the curly brackets have to be urlencoded(``{`` is
 
    In these versions we recommend using function parameters of type JSON to accept arrays from the client.
 
-.. _s_procs_variadic:
+.. _functions_variadic:
 
 Variadic functions
 ------------------
@@ -214,7 +218,7 @@ Repeating also works in POST requests with ``Content-Type: application/x-www-for
 Table-Valued Functions
 ----------------------
 
-A function that returns a table type can be filtered using the same filters as :ref:`tables and views <tables_views>`. They can also use :ref:`Resource Embedding <s_proc_embed>`.
+A function that returns a table type can be filtered using the same filters as :ref:`tables and views <tables_views>`. They can also use :ref:`Resource Embedding <function_embed>`.
 
 .. code-block:: postgres
 
@@ -252,7 +256,7 @@ Let's get its :ref:`explain_plan` when calling it with filters applied:
   curl "http://localhost:3000/rpc/getallprojects?id=eq.1" \
     -H "Accept: application/vnd.pgrst.plan"
 
-.. code-block:: psql
+.. code-block:: postgres
 
   Aggregate  (cost=8.18..8.20 rows=1 width=112)
     ->  Index Scan using projects_pkey on projects  (cost=0.15..8.17 rows=1 width=40)
