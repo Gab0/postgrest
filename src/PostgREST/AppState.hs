@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase      #-}
+{-# LANGUAGE MultiWayIf      #-}
 {-# LANGUAGE NamedFieldPuns  #-}
 {-# LANGUAGE RecordWildCards #-}
 
@@ -18,6 +19,7 @@ module PostgREST.AppState
   , getJwtCache
   , getSocketREST
   , getSocketAdmin
+  , getSchemaCacheLoaded
   , init
   , initSockets
   , initWithPool
@@ -100,6 +102,8 @@ data AppState = AppState
   , statePgVersion                :: IORef PgVersion
   -- | No schema cache at the start. Will be filled in by the connectionWorker
   , stateSchemaCache              :: IORef (Maybe SchemaCache)
+  -- | If schema cache is loaded
+  , stateSchemaCacheLoaded        :: IORef Bool
   -- | starts the connection worker with a debounce
   , debouncedConnectionWorker     :: IO ()
   -- | Binary semaphore used to sync the listener(NOTIFY reload) with the connectionWorker.
@@ -212,6 +216,7 @@ initWithPool (sock, adminSock) pool conf observer = do
   appState <- AppState pool
     <$> newIORef minimumPgVersion -- assume we're in a supported version when starting, this will be corrected on a later step
     <*> newIORef Nothing
+    <*> newIORef False
     <*> pure (pure ())
     <*> newEmptyMVar
     <*> newIORef False
@@ -373,6 +378,12 @@ getIsListenerOn = readIORef . stateIsListenerOn
 putIsListenerOn :: AppState -> Bool -> IO ()
 putIsListenerOn = atomicWriteIORef . stateIsListenerOn
 
+getSchemaCacheLoaded :: AppState -> IO Bool
+getSchemaCacheLoaded = readIORef . stateSchemaCacheLoaded
+
+putSchemaCacheLoaded :: AppState -> Bool -> IO ()
+putSchemaCacheLoaded = atomicWriteIORef . stateSchemaCacheLoaded
+
 -- | Schema cache status
 data SCacheStatus
   = SCLoaded
@@ -395,13 +406,17 @@ loadSchemaCache appState observer = do
         Nothing -> do
           putSchemaCache appState Nothing
           observer $ SchemaCacheNormalErrorObs e
+          putSchemaCacheLoaded appState False
           return SCOnRetry
 
     Right sCache -> do
-      putSchemaCache appState $ Just sCache
       observer $ SchemaCacheQueriedObs resultTime
       (t, _) <- timeItT $ observer $ SchemaCacheSummaryObs sCache
       observer $ SchemaCacheLoadedObs t
+      -- it's important to update AppState schema cache only once it has been fully evaluated before (this will be done by the observer above)
+      -- otherwise requests will wait for the schema cache to be loaded
+      putSchemaCache appState $ Just sCache
+      putSchemaCacheLoaded appState True
       return SCLoaded
 
 -- | Current database connection status data ConnectionStatus
@@ -577,26 +592,28 @@ listener appState observer = do
         putIsListenerOn appState True
         SQL.listen db $ SQL.toPgIdentifier dbChannel
         SQL.waitForNotifications handleNotification db
-      _ ->
-        die $ "Could not listen for notifications on the " <> dbChannel <> " channel"
+
+      Left err -> do
+        observer $ DBListenerFail dbChannel err
+        exitFailure
   where
-    handleFinally _ False _ = do
-      observer DBListenerFailNoRecoverObs
+    handleFinally dbChannel False err = do
+      observer $ DBListenerFailRecoverObs False dbChannel err
       killThread (getMainThreadId appState)
-    handleFinally dbChannel True _ = do
+    handleFinally dbChannel True err = do
       -- if the thread dies, we try to recover
-      observer $ DBListenerFailRecoverObs dbChannel
+      observer $ DBListenerFailRecoverObs True dbChannel err
       putIsListenerOn appState False
       -- assume the pool connection was also lost, call the connection worker
       connectionWorker appState
       -- retry the listener
       listener appState observer
 
-    handleNotification _ msg
-      | BS.null msg            = cacheReloader
-      | msg == "reload schema" = cacheReloader
-      | msg == "reload config" = reReadConfig False appState observer
-      | otherwise              = pure () -- Do nothing if anything else than an empty message is sent
+    handleNotification channel msg =
+      if | BS.null msg            -> observer (DBListenerGotSCacheMsg channel) >> cacheReloader
+         | msg == "reload schema" -> observer (DBListenerGotSCacheMsg channel) >> cacheReloader
+         | msg == "reload config" -> observer (DBListenerGotConfigMsg channel) >> reReadConfig False appState observer
+         | otherwise              -> pure () -- Do nothing if anything else than an empty message is sent
 
     cacheReloader =
       -- reloads the schema cache + restarts pool connections

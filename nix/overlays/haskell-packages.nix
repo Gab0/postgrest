@@ -28,6 +28,13 @@ let
       #
       # To fill in the sha256:
       #   update-nix-fetchgit nix/overlays/haskell-packages.nix
+      #
+      # - Nowadays you can just delete the sha256 attribute above and nix will assume a fake sha.
+      # Once you build the derivation it will suggest the correct sha.
+      # - If the library fails its test suite (usually when it runs IO tests), wrap the expression with `lib.dontCheck ()`
+      # - <subpath> is usually "."
+      # - When adding a new library version here, postgrest.cabal and stack.yaml must also be updated
+
 
       configurator-pg =
         prev.callHackageDirect
@@ -47,6 +54,15 @@ let
         });
 
       hasql-pool = lib.dontCheck prev.hasql-pool_0_10;
+
+      hasql-notifications = lib.dontCheck (prev.callHackageDirect
+        {
+          pkg = "hasql-notifications";
+          ver = "0.2.1.0";
+          sha256 = "sha256-MEIirDKR81KpiBOnWJbVInWevL6Kdb/XD1Qtd8e6KsQ=";
+        }
+        { }
+      );
 
     };
 in

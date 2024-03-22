@@ -12,6 +12,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
  - #3061, Apply all function settings as transaction-scoped settings - @taimoorzaeem
  - #3171, #3046, Log schema cache stats to stderr - @steve-chavez
  - #3210, Dump schema cache through admin API - @taimoorzaeem
+ - #2676, Performance improvement on bulk json inserts, around 10% increase on requests per second by removing `json_typeof` from write queries - @steve-chavez
 
 ### Fixed
 
@@ -21,6 +22,10 @@ This project adheres to [Semantic Versioning](http://semver.org/).
  - #3224, Return status code 406 for non-accepted media type instead of code 415 - @wolfgangwalther
  - #3160, Fix using select= query parameter for custom media type handlers - @wolfgangwalther
  - #3237, Dump media handlers and timezones with --dump-schema - @wolfgangwalther
+ - #3323, #3324, Don't hide error on LISTEN channel failure - @steve-chavez
+ - #3330, Incorrect admin server `/ready` response on slow schema cache loads - @steve-chavez
+ - #3327, Fix slow responses on schema cache reloads - @steve-chavez
+ - #3340, Log when the LISTEN channel gets a notification - @steve-chavez
 
 ### Deprecated
 
@@ -384,6 +389,11 @@ This project adheres to [Semantic Versioning](http://semver.org/).
  - #2312, Using `Prefer: return=representation` no longer returns a `Location` header - @laurenceisla
  - #1984, For the cases where one to one relationships are detected, json objects will be returned instead of json arrays of length 1
    + If you wish to override this behavior, you can use computed relationships to return arrays again
+   + You can get the newly detected one-to-one relationships by using the `--dump-schema` option and filtering with [jq](https://github.com/jqlang/jq).
+     ```
+     ./postgrest --dump-schema  \
+     | jq  '[.dbRelationships | .[] | .[1] | .[] | select(.relCardinality.tag == "O2O" and .relFTableIsView == false and .relTableIsView == false) | del(.relFTableIsView,.relTableIsView,.tag,.relIsSelf)]'
+     ```
 
 ## [9.0.1] - 2022-06-03
 

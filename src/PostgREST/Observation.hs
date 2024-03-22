@@ -9,7 +9,9 @@ module PostgREST.Observation
   ) where
 
 import qualified Data.ByteString.Lazy  as LBS
+import qualified Data.Text             as T
 import qualified Data.Text.Encoding    as T
+import qualified Hasql.Connection      as SQL
 import qualified Hasql.Pool            as SQL
 import qualified Network.Socket        as NS
 import           Numeric               (showFFloat)
@@ -36,8 +38,10 @@ data Observation
   | ConnectionRetryObs Int
   | ConnectionPgVersionErrorObs SQL.UsageError
   | DBListenerStart Text
-  | DBListenerFailNoRecoverObs
-  | DBListenerFailRecoverObs Text
+  | DBListenerFail Text SQL.ConnectionError
+  | DBListenerFailRecoverObs Bool Text (Either SomeException ())
+  | DBListenerGotSCacheMsg ByteString
+  | DBListenerGotConfigMsg ByteString
   | ConfigReadErrorObs
   | ConfigReadErrorFatalObs SQL.UsageError Text
   | ConfigReadErrorNotFatalObs SQL.UsageError
@@ -80,11 +84,15 @@ observationMessage = \case
   ConnectionPgVersionErrorObs usageErr ->
     jsonMessage usageErr
   DBListenerStart channel -> do
-    "Listening for notifications on the " <> channel <> " channel"
-  DBListenerFailNoRecoverObs ->
-    "Automatic recovery disabled, exiting."
-  DBListenerFailRecoverObs channel ->
-    "Retrying listening for notifications on the " <> channel <> " channel.."
+    "Listening for notifications on the " <> show channel <> " channel"
+  DBListenerFail channel err -> do
+    "Could not listen for notifications on the " <> channel <> " channel. " <> show err
+  DBListenerFailRecoverObs recover channel err ->
+    "Could not listen for notifications on the " <> channel <> " channel. " <> showListenerError err <> (if recover then " Retrying listening for notifications.." else mempty)
+  DBListenerGotSCacheMsg channel ->
+    "Received a schema cache reload message on the " <> show channel <> " channel"
+  DBListenerGotConfigMsg channel ->
+    "Received a config reload message on the " <> show channel <> " channel"
   ConfigReadErrorObs ->
     "An error ocurred when trying to query database settings for the config parameters"
   ConfigReadErrorFatalObs usageErr hint ->
@@ -106,3 +114,9 @@ observationMessage = \case
     showMillis x = toS $ showFFloat (Just 1) (x * 1000) ""
 
     jsonMessage err = T.decodeUtf8 . LBS.toStrict . Error.errorPayload $ Error.PgError False err
+
+    showListenerError :: Either SomeException () -> Text
+    showListenerError (Right _) = "Failed getting notifications" -- should not happen as the listener will never finish (hasql-notifications uses `forever` internally) with a Right result
+    showListenerError (Left e)  =
+      let showOnSingleLine txt = T.intercalate " " $ T.filter (/= '\t') <$> T.lines txt in -- the errors from hasql-notifications come intercalated with "\t\n"
+      showOnSingleLine $ show e
