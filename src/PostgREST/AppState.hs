@@ -71,6 +71,7 @@ import System.IO.Error                   (IOError)
 
 import PostgREST.Config                  (AppConfig (..),
                                           LogLevel (..),
+                                          SAMLEndpoints,
                                           addFallbackAppName,
                                           readAppConfig)
 import PostgREST.Config.Database         (queryDbSettings,
@@ -136,19 +137,12 @@ data SAML2State = SAML2State
   { saml2StateAppConfig    :: SAML2Config
   -- | Known assertion IDs, so we can avoid 'replay' attacks.
   , saml2KnownIds          :: C.Cache Text ()
-  -- | New PostgREST endpoint that listens to login requests.
-  , saml2LoginEndpointIn   :: Text
-  -- | PostgREST endpoint that points to a Postgres function that generates JWT tokens.
-  , saml2LoginEndpointOut  :: Text
-  -- | New PostgREST endpoint that listens to logout requests.
-  , saml2LogoutEndpointIn  :: Text
-  -- | PostgREST endpoint that points to a Postgres function that blacklists JWT tokens.
-  , saml2LogoutEndpointOut :: Text
+  , saml2Endpoints         :: SAMLEndpoints
   }
 
 -- | The default SAML2 parameters.
-standardSAML2State :: IO SAML2State
-standardSAML2State = do
+standardSAML2State :: AppConfig -> IO SAML2State
+standardSAML2State conf = do
   knownIds <- C.newCache Nothing :: IO (C.Cache Text ())
 
   putStrLn ("Trying to locate a SAML certificate in the environment." :: String)
@@ -158,10 +152,7 @@ standardSAML2State = do
     { saml2StateAppConfig = (saml2ConfigNoEncryption pubKey)
       { saml2DisableTimeValidation = False }
     , saml2KnownIds = knownIds
-    , saml2LoginEndpointIn   = "/sso/assert"
-    , saml2LoginEndpointOut  = "/rpc/validate_saml_role"
-    , saml2LogoutEndpointIn  = "/slo/assert"
-    , saml2LogoutEndpointOut = "/rpc/logout_user"
+    , saml2Endpoints = configSAMLEndpoints conf
     }
 
 -- | Read and process the certificate loaded from the environment variable
@@ -228,8 +219,7 @@ initWithPool (sock, adminSock) pool conf observer = do
     <*> C.newCache Nothing
     <*> pure sock
     <*> pure adminSock
-    <*> (Just <$> standardSAML2State)
-
+    <*> (Just <$> standardSAML2State conf)
 
   debPoolTimeout <-
     let oneSecond = 1000000 in

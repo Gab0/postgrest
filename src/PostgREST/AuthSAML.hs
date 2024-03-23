@@ -35,7 +35,7 @@ import qualified Network.Wai.Parse     as Wai
 import           Network.HTTP.Types    (status200, status401)
 
 import           PostgREST.AppState    (AppState (..), SAML2State (..))
-
+import           PostgREST.Config      (SAMLEndpoints (..))
 import           Protolude
 import           Prelude               (lookup)
 
@@ -68,13 +68,14 @@ middleware appState app req respond = do
 -- | Match request action
 matchRequestRoute :: Wai.Request -> SAML2State -> RequestRoute
 matchRequestRoute req samlState
-  | p == saml2LoginEndpointIn   samlState = Login
-  | p == saml2LoginEndpointOut  samlState = Block
-  | p == saml2LogoutEndpointIn  samlState = Logout
-  | p == saml2LogoutEndpointOut samlState = Block
+  | p == samlEndpointLoginIn   samlEndpoints = Login
+  | p == samlEndpointLoginOut  samlEndpoints = Block
+  | p == samlEndpointLogoutIn  samlEndpoints = Logout
+  | p == samlEndpointLogoutOut samlEndpoints = Block
   | otherwise = Pass
   where
     p = T.pack $ BSU.toString $ Wai.rawPathInfo req
+    samlEndpoints = saml2Endpoints samlState
 
 -- | Discard the request and respond with an error message.
 respondError :: BL.ByteString -> Wai.Response
@@ -152,7 +153,7 @@ handleSAMLLoginResult samlState result' app req respond =
 
           putStrLn ("SAML parameters: " ++ show (Map.toList attributes) :: String)
 
-          req' <- rerouteRequestToAnotherEndpoint req (saml2LoginEndpointOut samlState) attributes
+          req' <- rerouteRequestToAnotherEndpoint req (samlEndpointLoginOut $ saml2Endpoints samlState) attributes
           storeAssertionID samlState (SAML2.assertionId (SAML2.assertion result))
           app req' respond
   where
@@ -165,7 +166,7 @@ handleSAMLLoginResult samlState result' app req respond =
 handleSAMLLogoutResult :: SAML2State -> Text -> Wai.Middleware
 handleSAMLLogoutResult samlState username app req respond = do
   putStrLn $ "SAML Logout: " ++ show username
-  req' <- rerouteRequestToAnotherEndpoint req (saml2LogoutEndpointOut samlState) $ Map.fromList [(T.pack "name_id", username)]
+  req' <- rerouteRequestToAnotherEndpoint req (samlEndpointLogoutOut $ saml2Endpoints samlState) $ Map.fromList [(T.pack "name_id", username)]
   app req' respond
 
 -- | Encode a certificate to be used as a JWT parameter.

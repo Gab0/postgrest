@@ -18,6 +18,7 @@ module PostgREST.Config
   , LogLevel(..)
   , OpenAPIMode(..)
   , Proxy(..)
+  , SAMLEndpoints(..)
   , toText
   , isMalformedProxyUri
   , readAppConfig
@@ -112,6 +113,7 @@ data AppConfig = AppConfig
   , configRoleSettings             :: RoleSettings
   , configRoleIsoLvl               :: RoleIsolationLvl
   , configInternalSCSleep          :: Maybe Int32
+  , configSAMLEndpoints            :: SAMLEndpoints
   }
 
 data LogLevel = LogCrit | LogError | LogWarn | LogInfo
@@ -285,6 +287,7 @@ parser optPath env dbSettings roleSettings roleIsolationLvl =
     <*> pure roleSettings
     <*> pure roleIsolationLvl
     <*> optInt "internal-schema-cache-sleep"
+    <*> parseSAMLEndpoints
   where
     parseAppSettings :: C.Key -> C.Parser C.Config [(Text, Text)]
     parseAppSettings key = addFromEnv . fmap (fmap coerceText) <$> C.subassocs key C.value
@@ -416,6 +419,13 @@ parser optPath env dbSettings roleSettings roleIsolationLvl =
     splitOnCommas (C.String s) = T.strip <$> T.splitOn "," s
     splitOnCommas _            = []
 
+    parseSAMLEndpoints :: C.Parser C.Config SAMLEndpoints
+    parseSAMLEndpoints = SAMLEndpoints
+      <$> (fromMaybe "/sso/assert" <$> optString "saml-endpoint-login-in")
+      <*> (fromMaybe "/rpc/validate_saml_role" <$> optString "saml-endpoint-login-out")
+      <*> (fromMaybe "/slo/assert" <$> optString "saml-endpoint-logout-in")
+      <*> (fromMaybe "/rpc/logout_user" <$> optString "saml-endpoint-logout-out")
+
 -- | Read the JWT secret from a file if configJwtSecret is actually a
 -- filepath(has @ as its prefix). To check if the JWT secret is provided is
 -- in fact a file path, it must be decoded as 'Text' to be processed.
@@ -516,3 +526,18 @@ addFallbackAppName version dbUri = dbUri <>
     uriFmt = pKeyWord <> toS (escapeURIString isUnescapedInURIComponent $ toS pgrstVer)
     pKeyWord = "fallback_application_name="
     pgrstVer = "PostgREST " <> T.decodeUtf8 version
+
+-- | Various endpoints used for SAML authentication,
+-- both for login and logouts.
+data SAMLEndpoints = SAMLEndpoints
+  {
+  -- | New PostgREST endpoint that listens to login requests.
+    samlEndpointLoginIn   :: Text
+  -- | PostgREST endpoint that points to a Postgres function that generates JWT tokens.
+  , samlEndpointLoginOut  :: Text
+  -- | New PostgREST endpoint that listens to logout requests.
+  , samlEndpointLogoutIn  :: Text
+  -- | PostgREST endpoint that points to a Postgres function that blacklists JWT tokens.
+  , samlEndpointLogoutOut :: Text
+  }
+
