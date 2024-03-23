@@ -56,6 +56,7 @@ library
                       PostgREST.Config.PgVersion
                       PostgREST.Config.Proxy
                       PostgREST.Cors
+                      PostgREST.SAMLState
                       PostgREST.SchemaCache
                       PostgREST.SchemaCache.Identifiers
                       PostgREST.SchemaCache.Routine

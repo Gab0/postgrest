@@ -32,16 +32,12 @@ module PostgREST.AppState
   , runListener
   ) where
 
-import           Crypto.PubKey.RSA.Types    (PublicKey)
 import qualified Data.Aeson                 as JSON
 import qualified Data.Aeson.KeyMap          as KM
-import qualified Data.ByteString            (readFile)
 import qualified Data.ByteString.Char8      as BS
 import qualified Data.Cache                 as C
 import           Data.Either.Combinators    (whenLeft)
-import qualified Data.List                  as L
-import qualified Data.Text                  as T (splitOn, pack, unpack)
-import qualified Data.ByteString.UTF8       as UTF8
+import qualified Data.Text                  as T (unpack)
 import           Hasql.Connection           (acquire)
 import qualified Hasql.Notifications        as SQL
 import qualified Hasql.Pool                 as SQL
@@ -64,14 +60,8 @@ import Data.IORef         (IORef, atomicWriteIORef, newIORef,
                            readIORef)
 import Data.Time.Clock    (UTCTime, getCurrentTime)
 
-import Network.Wai.SAML2  (SAML2Config (..), saml2ConfigNoEncryption)
-import Network.Wai.SAML2.Validation      (readSignedCertificate, readPKCS12Certificate)
-
-import System.IO.Error                   (IOError)
-
 import PostgREST.Config                  (AppConfig (..),
                                           LogLevel (..),
-                                          SAMLEndpoints,
                                           addFallbackAppName,
                                           readAppConfig)
 import PostgREST.Config.Database         (queryDbSettings,
@@ -79,15 +69,14 @@ import PostgREST.Config.Database         (queryDbSettings,
                                           queryRoleSettings)
 import PostgREST.Config.PgVersion        (PgVersion (..),
                                           minimumPgVersion)
+import PostgREST.SAMLState
 import PostgREST.SchemaCache             (SchemaCache (..),
                                           querySchemaCache)
 import PostgREST.SchemaCache.Identifiers (dumpQi)
 import PostgREST.Unix                    (createAndBindDomainSocket)
 
 import Data.Streaming.Network (bindPortTCP, bindRandomPortTCP)
-import Data.String            (IsString (..), String)
-
-import System.Environment                (lookupEnv)
+import Data.String            (IsString (..))
 
 import Protolude
 
@@ -132,68 +121,6 @@ data AppState = AppState
   }
 
 type AppSockets = (NS.Socket, Maybe NS.Socket)
-
-data SAML2State = SAML2State
-  { saml2StateAppConfig    :: SAML2Config
-  -- | Known assertion IDs, so we can avoid 'replay' attacks.
-  , saml2KnownIds          :: C.Cache Text ()
-  , saml2Endpoints         :: SAMLEndpoints
-  }
-
--- | The default SAML2 parameters.
-standardSAML2State :: AppConfig -> IO SAML2State
-standardSAML2State conf = do
-  knownIds <- C.newCache Nothing :: IO (C.Cache Text ())
-
-  putStrLn ("Trying to locate a SAML certificate in the environment." :: String)
-  pubKey <- loadPublicKey =<< lookupEnv "POSTGREST_SAML_CERTIFICATE"
-
-  pure $ SAML2State
-    { saml2StateAppConfig = (saml2ConfigNoEncryption pubKey)
-      { saml2DisableTimeValidation = False }
-    , saml2KnownIds = knownIds
-    , saml2Endpoints = configSAMLEndpoints conf
-    }
-
--- | Read and process the certificate loaded from the environment variable
--- into a PublicKey.
--- This env var can be provided as a path to a '.pem' file containing the certificate
--- or given as raw certificate data.
-loadPublicKey :: Maybe String -> IO (Maybe PublicKey)
-loadPublicKey Nothing = do
-  putStrLn ("No SAML certificate provided." :: String)
-  pure Nothing
-loadPublicKey (Just rawKeyFromEnv) = do
-
-  keyFromEnv <- interpreteEnv rawKeyFromEnv
-  password <- lookupEnv "POSTGREST_SAML_CERTIFICATE_PASSWORD"
-  case keyFromEnv of
-    Left err -> do
-      putStrLn ("Failure to read the SAML certificate. " ++ show err :: String)
-      pure Nothing
-    Right key -> do
-      -- Load the public key from the loaded certificate data.
-      putStrLn ("Reading the SAML certificate from the environment... " ++ take 10 (show key) :: String)
-
-      let (err, publicKeys) = partitionEithers [
-              readSignedCertificate $ UTF8.toString key,
-              readPKCS12Certificate key (UTF8.fromString <$> password)
-            ]
-
-      putStrLn (show err :: String)
-      let publicKey = listToMaybe publicKeys
-      putStrLn ("Loaded a public key: " ++ show publicKey :: String)
-
-      pure publicKey
-  where
-    getExtension :: String -> Text
-    getExtension = L.last . T.splitOn "." . T.pack
-
-    interpreteEnv :: String -> IO (Either IOError ByteString)
-    interpreteEnv raw =
-      case getExtension raw of
-        "pem" -> try $ Data.ByteString.readFile raw
-        _     -> pure $ Right $ UTF8.fromString raw
 
 init :: AppConfig -> (Observation -> IO ()) -> IO AppState
 init conf observer = do
