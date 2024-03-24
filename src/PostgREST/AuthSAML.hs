@@ -1,10 +1,3 @@
-{-|
-Module      : PostgREST.AuthSAML
-Description : PostgREST SAML authentication functions.
-
-This module provides functions to deal with the SAML authentication.
-
--}
 {-# OPTIONS_GHC -Wwarn=deprecations #-}
 {-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE LambdaCase #-}
@@ -98,14 +91,16 @@ handleSamlError err = do
   pure $ respondError "SAML authentication error. Check the server logs."
 
 -- | Converts the original request into a request to the login endpoint.
--- NOTE: This might not be the best idea.
+--
+-- NOTE: This method might not be the best idea.
 -- The alternative is to create a proper PostgREST action to call the login RPC function.
-rerouteRequestToAnotherEndpoint :: Wai.Request -> Text -> Map.Map Text Text -> IO Wai.Request
-rerouteRequestToAnotherEndpoint req target_endpoint parameters = do
+-- Is this secure enough? Here we rewrite the entire request.
+rerouteRequestToAnotherEndpoint :: Text -> Map.Map Text Text -> IO Wai.Request
+rerouteRequestToAnotherEndpoint target_endpoint parameters = do
 
   newBody <- generateBody
 
-  return req
+  return Wai.defaultRequest
     { Wai.requestHeaders = new_headers
     , Wai.requestBody = newBody
     , Wai.rawPathInfo = BSU.fromString $ T.unpack target_endpoint
@@ -136,9 +131,10 @@ renderFormData d = S8.pack $ intercalate "&" $ map renderPair $ Map.toList d
   where
     renderPair (k, v) = k ++ "=" ++ v
 
--- | Modifies the request according to the results from the SAML2 validation.
+-- | Parses SAML authentication information from the incoming SSO/SLO request.
+-- Replaces this request with another, targeted to the PostgreSQL function that handles authentication.
 handleSAMLLoginResult :: SAML2State -> Either SAML2.SAML2Error SAML2.Result -> Wai.Middleware
-handleSAMLLoginResult samlState result' app req respond =
+handleSAMLLoginResult samlState result' app _ respond =
   case result' of
     Left err -> respond =<< handleSamlError (show err)
     Right result -> do
@@ -153,7 +149,7 @@ handleSAMLLoginResult samlState result' app req respond =
 
           putStrLn ("SAML parameters: " ++ show (Map.toList attributes) :: String)
 
-          req' <- rerouteRequestToAnotherEndpoint req (samlEndpointLoginOut $ saml2Endpoints samlState) attributes
+          req' <- rerouteRequestToAnotherEndpoint (samlEndpointLoginOut $ saml2Endpoints samlState) attributes
           storeAssertionID samlState (SAML2.assertionId (SAML2.assertion result))
           app req' respond
   where
@@ -164,9 +160,9 @@ handleSAMLLoginResult samlState result' app req respond =
 
 -- | Handle the SAML2 logout (SLO).
 handleSAMLLogoutResult :: SAML2State -> Text -> Wai.Middleware
-handleSAMLLogoutResult samlState username app req respond = do
+handleSAMLLogoutResult samlState username app _ respond = do
   putStrLn $ "SAML Logout: " ++ show username
-  req' <- rerouteRequestToAnotherEndpoint req (samlEndpointLogoutOut $ saml2Endpoints samlState) $ Map.fromList [(T.pack "name_id", username)]
+  req' <- rerouteRequestToAnotherEndpoint (samlEndpointLogoutOut $ saml2Endpoints samlState) $ Map.fromList [(T.pack "name_id", username)]
   app req' respond
 
 -- | Encode a certificate to be used as a JWT parameter.

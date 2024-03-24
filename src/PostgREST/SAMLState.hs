@@ -1,6 +1,8 @@
 
-module PostgREST.SAMLState where
-
+module PostgREST.SAMLState
+  ( SAML2State(..)
+  , standardSAML2State
+  ) where
 
 import           Crypto.PubKey.RSA.Types    (PublicKey)
 import qualified Data.ByteString            (readFile)
