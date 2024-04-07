@@ -16,14 +16,13 @@ resource.
 {-# LANGUAGE RecordWildCards       #-}
 
 module PostgREST.Plan
-  ( wrappedReadPlan
-  , mutateReadPlan
-  , callReadPlan
-  , inspectPlan
-  , WrappedReadPlan(..)
-  , MutateReadPlan(..)
-  , CallReadPlan(..)
+  ( actionPlan
+  , ActionPlan(..)
+  , DbActionPlan(..)
   , InspectPlan(..)
+  , InfoPlan(..)
+  , CrudPlan(..)
+  , CallReadPlan(..)
   ) where
 
 import qualified Data.ByteString.Lazy          as LBS
@@ -39,6 +38,7 @@ import Data.Tree               (Tree (..))
 
 import PostgREST.ApiRequest                  (Action (..),
                                               ApiRequest (..),
+                                              DbAction (..),
                                               InvokeMethod (..),
                                               Mutation (..),
                                               Payload (..))
@@ -92,75 +92,102 @@ import Protolude hiding (from)
 -- Setup for doctests
 -- >>> import Data.Ranged.Ranges (fullRange)
 
-data WrappedReadPlan = WrappedReadPlan {
-  wrReadPlan :: ReadPlanTree
-, wrTxMode   :: SQL.Mode
-, wrHandler  :: MediaHandler
-, wrMedia    :: MediaType
-}
-
-data MutateReadPlan = MutateReadPlan {
-  mrReadPlan   :: ReadPlanTree
-, mrMutatePlan :: MutatePlan
-, mrTxMode     :: SQL.Mode
-, mrHandler    :: MediaHandler
-, mrMedia      :: MediaType
-}
+data CrudPlan
+  = WrappedReadPlan
+  { wrReadPlan :: ReadPlanTree
+  , pTxMode    :: SQL.Mode
+  , wrHandler  :: MediaHandler
+  , wrMedia    :: MediaType
+  , wrHdrsOnly :: Bool
+  , crudQi     :: QualifiedIdentifier
+  }
+  | MutateReadPlan {
+    mrReadPlan   :: ReadPlanTree
+  , mrMutatePlan :: MutatePlan
+  , pTxMode      :: SQL.Mode
+  , mrHandler    :: MediaHandler
+  , mrMedia      :: MediaType
+  , mrMutation   :: Mutation
+  , crudQi       :: QualifiedIdentifier
+  }
 
 data CallReadPlan = CallReadPlan {
-  crReadPlan :: ReadPlanTree
-, crCallPlan :: CallPlan
-, crTxMode   :: SQL.Mode
-, crProc     :: Routine
-, crHandler  :: MediaHandler
-, crMedia    :: MediaType
-}
+    crReadPlan :: ReadPlanTree
+  , crCallPlan :: CallPlan
+  , crTxMode   :: SQL.Mode
+  , crProc     :: Routine
+  , crHandler  :: MediaHandler
+  , crMedia    :: MediaType
+  , crInvMthd  :: InvokeMethod
+  , crQi       :: QualifiedIdentifier
+  }
 
 data InspectPlan = InspectPlan {
-  ipMedia  :: MediaType
-, ipTxmode :: SQL.Mode
-}
+    ipMedia    :: MediaType
+  , ipTxmode   :: SQL.Mode
+  , ipHdrsOnly :: Bool
+  , ipSchema   :: Schema
+  }
 
-wrappedReadPlan :: QualifiedIdentifier -> AppConfig -> SchemaCache -> ApiRequest -> Either Error WrappedReadPlan
-wrappedReadPlan  identifier conf sCache apiRequest@ApiRequest{iPreferences=Preferences{..},..} = do
+data DbActionPlan = DbCrud CrudPlan | DbCall CallReadPlan | MaybeDb InspectPlan
+data InfoPlan     = RelInfoPlan QualifiedIdentifier | RoutineInfoPlan CallReadPlan | SchemaInfoPlan
+data ActionPlan   = Db DbActionPlan | NoDb InfoPlan
+
+actionPlan :: Action -> AppConfig -> ApiRequest -> SchemaCache -> Either Error ActionPlan
+actionPlan act conf apiReq sCache = case act of
+    ActDb dbAct              -> Db <$> dbActionPlan dbAct conf apiReq sCache
+    ActRelationInfo ident    -> pure . NoDb $ RelInfoPlan ident
+    ActRoutineInfo ident inv -> NoDb . RoutineInfoPlan <$> callReadPlan ident conf sCache apiReq inv
+    ActSchemaInfo            -> pure $ NoDb SchemaInfoPlan
+
+dbActionPlan :: DbAction -> AppConfig -> ApiRequest -> SchemaCache -> Either Error DbActionPlan
+dbActionPlan dbAct conf apiReq sCache = case dbAct of
+  ActRelationRead identifier headersOnly ->
+    DbCrud <$> wrappedReadPlan identifier conf sCache apiReq headersOnly
+  ActRelationMut identifier mut ->
+    DbCrud <$> mutateReadPlan mut apiReq identifier conf sCache
+  ActRoutine identifier invMethod ->
+    DbCall <$> callReadPlan identifier conf sCache apiReq invMethod
+  ActSchemaRead tSchema headersOnly ->
+    MaybeDb <$> inspectPlan apiReq headersOnly tSchema
+
+wrappedReadPlan :: QualifiedIdentifier -> AppConfig -> SchemaCache -> ApiRequest -> Bool -> Either Error CrudPlan
+wrappedReadPlan  identifier conf sCache apiRequest@ApiRequest{iPreferences=Preferences{..},..} headersOnly = do
   rPlan <- readPlan identifier conf sCache apiRequest
   (handler, mediaType)  <- mapLeft ApiRequestError $ negotiateContent conf apiRequest identifier iAcceptMediaType (dbMediaHandlers sCache) (hasDefaultSelect rPlan)
   if not (null invalidPrefs) && preferHandling == Just Strict then Left $ ApiRequestError $ InvalidPreferences invalidPrefs else Right ()
-  return $ WrappedReadPlan rPlan SQL.Read handler mediaType
+  return $ WrappedReadPlan rPlan SQL.Read handler mediaType headersOnly identifier
 
-mutateReadPlan :: Mutation -> ApiRequest -> QualifiedIdentifier -> AppConfig -> SchemaCache -> Either Error MutateReadPlan
+mutateReadPlan :: Mutation -> ApiRequest -> QualifiedIdentifier -> AppConfig -> SchemaCache -> Either Error CrudPlan
 mutateReadPlan  mutation apiRequest@ApiRequest{iPreferences=Preferences{..},..} identifier conf sCache = do
   rPlan <- readPlan identifier conf sCache apiRequest
   mPlan <- mutatePlan mutation identifier apiRequest sCache rPlan
   if not (null invalidPrefs) && preferHandling == Just Strict then Left $ ApiRequestError $ InvalidPreferences invalidPrefs else Right ()
   (handler, mediaType)  <- mapLeft ApiRequestError $ negotiateContent conf apiRequest identifier iAcceptMediaType (dbMediaHandlers sCache) (hasDefaultSelect rPlan)
-  return $ MutateReadPlan rPlan mPlan SQL.Write handler mediaType
+  return $ MutateReadPlan rPlan mPlan SQL.Write handler mediaType mutation identifier
 
 callReadPlan :: QualifiedIdentifier -> AppConfig -> SchemaCache -> ApiRequest -> InvokeMethod -> Either Error CallReadPlan
 callReadPlan identifier conf sCache apiRequest@ApiRequest{iPreferences=Preferences{..},..} invMethod = do
   let paramKeys = case invMethod of
-        InvGet  -> S.fromList $ fst <$> qsParams'
-        InvHead -> S.fromList $ fst <$> qsParams'
-        InvPost -> iColumns
+        InvRead _ -> S.fromList $ fst <$> qsParams'
+        Inv       -> iColumns
   proc@Function{..} <- mapLeft ApiRequestError $
-    findProc identifier paramKeys (preferParameters == Just SingleObject) (dbRoutines sCache) iContentMediaType (invMethod == InvPost)
+    findProc identifier paramKeys (preferParameters == Just SingleObject) (dbRoutines sCache) iContentMediaType (invMethod == Inv)
   let relIdentifier = QualifiedIdentifier pdSchema (fromMaybe pdName $ Routine.funcTableName proc) -- done so a set returning function can embed other relations
   rPlan <- readPlan relIdentifier conf sCache apiRequest
   let args = case (invMethod, iContentMediaType) of
-        (InvGet, _)             -> jsonRpcParams proc qsParams'
-        (InvHead, _)            -> jsonRpcParams proc qsParams'
-        (InvPost, MTUrlEncoded) -> maybe mempty (jsonRpcParams proc . payArray) iPayload
-        (InvPost, _)            -> maybe mempty payRaw iPayload
+        (InvRead _, _)      -> jsonRpcParams proc qsParams'
+        (Inv, MTUrlEncoded) -> maybe mempty (jsonRpcParams proc . payArray) iPayload
+        (Inv, _)            -> maybe mempty payRaw iPayload
       txMode = case (invMethod, pdVolatility) of
-          (InvGet,  _)                 -> SQL.Read
-          (InvHead, _)                 -> SQL.Read
-          (InvPost, Routine.Stable)    -> SQL.Read
-          (InvPost, Routine.Immutable) -> SQL.Read
-          (InvPost, Routine.Volatile)  -> SQL.Write
+          (InvRead _,  _)          -> SQL.Read
+          (Inv, Routine.Stable)    -> SQL.Read
+          (Inv, Routine.Immutable) -> SQL.Read
+          (Inv, Routine.Volatile)  -> SQL.Write
       cPlan = callPlan proc apiRequest paramKeys args rPlan
   (handler, mediaType)  <- mapLeft ApiRequestError $ negotiateContent conf apiRequest relIdentifier iAcceptMediaType (dbMediaHandlers sCache) (hasDefaultSelect rPlan)
   if not (null invalidPrefs) && preferHandling == Just Strict then Left $ ApiRequestError $ InvalidPreferences invalidPrefs else Right ()
-  return $ CallReadPlan rPlan cPlan txMode proc handler mediaType
+  return $ CallReadPlan rPlan cPlan txMode proc handler mediaType invMethod identifier
   where
     qsParams' = QueryParams.qsParams iQueryParams
 
@@ -168,14 +195,14 @@ hasDefaultSelect :: ReadPlanTree -> Bool
 hasDefaultSelect (Node ReadPlan{select=[CoercibleSelectField{csField=CoercibleField{cfName}}]} []) = cfName == "*"
 hasDefaultSelect _ = False
 
-inspectPlan :: ApiRequest -> Either Error InspectPlan
-inspectPlan apiRequest = do
+inspectPlan :: ApiRequest -> Bool -> Schema -> Either Error InspectPlan
+inspectPlan apiRequest headersOnly schema = do
   let producedMTs = [MTOpenAPI, MTApplicationJSON, MTAny]
       accepts     = iAcceptMediaType apiRequest
   mediaType <- if not . null $ L.intersect accepts producedMTs
     then Right MTOpenAPI
     else Left . ApiRequestError . MediaTypeError $ MediaType.toMime <$> accepts
-  return $ InspectPlan mediaType SQL.Read
+  return $ InspectPlan mediaType SQL.Read headersOnly schema
 
 {-|
   Search a pg proc by matching name and arguments keys to parameters. Since a function can be overloaded,
@@ -425,7 +452,7 @@ expandStarsForTable ctx@ResolverContext{representations, outputType} hasAgg rp@R
 
 -- | Enforces the `max-rows` config on the result
 treeRestrictRange :: Maybe Integer -> Action -> ReadPlanTree -> Either ApiRequestError ReadPlanTree
-treeRestrictRange _ (ActionMutate _) request = Right request
+treeRestrictRange _ (ActDb (ActRelationMut _ _)) request = Right request
 treeRestrictRange maxRows _ request = pure $ nodeRestrictRange maxRows <$> request
   where
     nodeRestrictRange :: Maybe Integer -> ReadPlan -> ReadPlan
@@ -462,9 +489,9 @@ addRels schema action allRels parentNode (Node rPlan@ReadPlan{relName,relHint,re
         newReadPlan = case action of
           -- the CTE for mutations/rpc is used as WITH sourceCTEName .. SELECT .. FROM sourceCTEName as alias,
           -- we use the table name as an alias so findRel can find the right relationship.
-          ActionMutate _ -> rPlan{from=newFrom, fromAlias=newAlias}
-          ActionInvoke _ -> rPlan{from=newFrom, fromAlias=newAlias}
-          _              -> rPlan
+          ActDb (ActRelationMut _ _) -> rPlan{from=newFrom, fromAlias=newAlias}
+          ActDb (ActRoutine _ _)     -> rPlan{from=newFrom, fromAlias=newAlias}
+          _                  -> rPlan
       in
       Node newReadPlan <$> updateForest (Just $ Node newReadPlan forest)
   where
@@ -702,9 +729,9 @@ addFilters ctx ApiRequest{..} rReq =
     QueryParams.QueryParams{..} = iQueryParams
     flts =
       case iAction of
-        ActionInvoke _ -> qsFilters
-        ActionRead _   -> qsFilters
-        _              -> qsFiltersNotRoot
+        ActDb (ActRelationRead _  _) -> qsFilters
+        ActDb (ActRoutine _ _)       -> qsFilters
+        _                            -> qsFiltersNotRoot
 
     addFilterToNode :: (EmbedPath, Filter) -> Either ApiRequestError ReadPlanTree ->  Either ApiRequestError ReadPlanTree
     addFilterToNode =
@@ -713,8 +740,8 @@ addFilters ctx ApiRequest{..} rReq =
 addOrders :: ResolverContext -> ApiRequest -> ReadPlanTree -> Either ApiRequestError ReadPlanTree
 addOrders ctx ApiRequest{..} rReq =
   case iAction of
-    ActionMutate _ -> Right rReq
-    _              -> foldr addOrderToNode (Right rReq) qsOrder
+    ActDb (ActRelationMut _ _) -> Right rReq
+    _                          -> foldr addOrderToNode (Right rReq) qsOrder
   where
     QueryParams.QueryParams{..} = iQueryParams
 
@@ -834,8 +861,8 @@ addNullEmbedFilters (Node rp@ReadPlan{where_=curLogic} forest) = do
 addRanges :: ApiRequest -> ReadPlanTree -> Either ApiRequestError ReadPlanTree
 addRanges ApiRequest{..} rReq =
   case iAction of
-    ActionMutate _ -> Right rReq
-    _              -> foldr addRangeToNode (Right rReq) =<< ranges
+    ActDb (ActRelationMut _ _) -> Right rReq
+    _                          -> foldr addRangeToNode (Right rReq) =<< ranges
   where
     ranges :: Either ApiRequestError [(EmbedPath, NonnegRange)]
     ranges = first QueryParamError $ QueryParams.pRequestRange `traverse` HM.toList iRange
@@ -997,13 +1024,13 @@ addFilterToLogicForest flt lf = CoercibleStmnt flt : lf
 negotiateContent :: AppConfig -> ApiRequest -> QualifiedIdentifier -> [MediaType] -> MediaHandlerMap -> Bool -> Either ApiRequestError ResolvedHandler
 negotiateContent conf ApiRequest{iAction=act, iPreferences=Preferences{preferRepresentation=rep}} identifier accepts produces defaultSelect =
   case (act, firstAcceptedPick) of
-    (_, Nothing)                         -> Left . MediaTypeError $ map MediaType.toMime accepts
-    (ActionMutate _, Just (x, mt))       -> Right (if rep == Just Full then x else NoAgg, mt)
+    (_, Nothing)                                             -> Left . MediaTypeError $ map MediaType.toMime accepts
+    (ActDb (ActRelationMut _ _),              Just (x, mt)) -> Right (if rep == Just Full then x else NoAgg, mt)
     -- no need for an aggregate on HEAD https://github.com/PostgREST/postgrest/issues/2849
     -- TODO: despite no aggregate, these are responding with a Content-Type, which is not correct.
-    (ActionRead True, Just (_, mt))      -> Right (NoAgg, mt)
-    (ActionInvoke InvHead, Just (_, mt)) -> Right (NoAgg, mt)
-    (_, Just (x, mt))                    -> Right (x, mt)
+    (ActDb (ActRelationRead _ True),             Just (_, mt)) -> Right (NoAgg, mt)
+    (ActDb (ActRoutine  _ (InvRead True)), Just (_, mt))             -> Right (NoAgg, mt)
+    (_, Just (x, mt))                                        -> Right (x, mt)
   where
     firstAcceptedPick = listToMaybe $ mapMaybe matchMT accepts -- If there are multiple accepted media types, pick the first. This is usual in content negotiation.
     matchMT mt = case mt of

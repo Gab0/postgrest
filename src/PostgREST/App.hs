@@ -9,7 +9,6 @@ Some of its functionality includes:
 - Producing HTTP Headers according to RFCs.
 - Content Negotiation
 -}
-{-# LANGUAGE NamedFieldPuns  #-}
 {-# LANGUAGE RecordWildCards #-}
 module PostgREST.App
   ( postgrest
@@ -24,39 +23,33 @@ import Data.String              (IsString (..))
 import Network.Wai.Handler.Warp (defaultSettings, setHost, setPort,
                                  setServerName)
 
-import qualified Data.HashMap.Strict        as HM
-import qualified Data.Text.Encoding         as T
-import qualified Hasql.Transaction.Sessions as SQL
-import qualified Network.Wai                as Wai
-import qualified Network.Wai.Handler.Warp   as Warp
+import qualified Data.Text.Encoding       as T
+import qualified Network.Wai              as Wai
+import qualified Network.Wai.Handler.Warp as Warp
 
-import qualified PostgREST.Admin            as Admin
-import qualified PostgREST.ApiRequest       as ApiRequest
-import qualified PostgREST.ApiRequest.Types as ApiRequestTypes
-import qualified PostgREST.AppState         as AppState
-import qualified PostgREST.Auth             as Auth
-import qualified PostgREST.AuthSAML         as AuthSAML
-import qualified PostgREST.Cors             as Cors
-import qualified PostgREST.Error            as Error
-import qualified PostgREST.Logger           as Logger
-import qualified PostgREST.Plan             as Plan
-import qualified PostgREST.Query            as Query
-import qualified PostgREST.Response         as Response
-import qualified PostgREST.Unix             as Unix (installSignalHandlers)
+import qualified PostgREST.Admin      as Admin
+import qualified PostgREST.ApiRequest as ApiRequest
+import qualified PostgREST.AppState   as AppState
+import qualified PostgREST.Auth       as Auth
+import qualified PostgREST.AuthSAML   as AuthSAML
+import qualified PostgREST.Cors       as Cors
+import qualified PostgREST.Error      as Error
+import qualified PostgREST.Logger     as Logger
+import qualified PostgREST.Plan       as Plan
+import qualified PostgREST.Query      as Query
+import qualified PostgREST.Response   as Response
+import qualified PostgREST.Unix       as Unix (installSignalHandlers)
 
-import PostgREST.ApiRequest           (Action (..), ApiRequest (..),
-                                       Mutation (..), Target (..))
+import PostgREST.ApiRequest           (ApiRequest (..))
 import PostgREST.AppState             (AppState)
 import PostgREST.Auth                 (AuthResult (..))
-import PostgREST.Config               (AppConfig (..))
+import PostgREST.Config               (AppConfig (..), LogLevel (..))
 import PostgREST.Config.PgVersion     (PgVersion (..))
 import PostgREST.Error                (Error)
 import PostgREST.Observation          (Observation (..))
-import PostgREST.Query                (DbHandler)
 import PostgREST.Response.Performance (ServerTiming (..),
                                        serverTimingHeader)
 import PostgREST.SchemaCache          (SchemaCache (..))
-import PostgREST.SchemaCache.Routine  (Routine (..))
 import PostgREST.Version              (docsVersion, prettyVersion)
 
 import qualified Data.ByteString.Char8 as BS
@@ -80,7 +73,7 @@ run appState observer = do
 
   Admin.runAdmin conf appState (serverSettings conf) observer
 
-  let app = postgrest conf appState (AppState.connectionWorker appState) observer
+  let app = postgrest configLogLevel appState (AppState.connectionWorker appState) observer
 
   case configServerUnixSocket of
     Just path -> do
@@ -99,13 +92,13 @@ serverSettings AppConfig{..} =
     & setServerName ("postgrest/" <> prettyVersion)
 
 -- | PostgREST application
-postgrest :: AppConfig -> AppState.AppState -> IO () -> (Observation -> IO ()) -> Wai.Application
-postgrest conf appState connWorker observer =
-  traceHeaderMiddleware conf .
-  Cors.middleware (configServerCorsAllowedOrigins conf) .
+postgrest :: LogLevel -> AppState.AppState -> IO () -> (Observation -> IO ()) -> Wai.Application
+postgrest logLevel appState connWorker observer =
+  traceHeaderMiddleware appState .
+  Cors.middleware appState .
   AuthSAML.middleware appState .
   Auth.middleware appState .
-  Logger.middleware (configLogLevel conf) $
+  Logger.middleware logLevel $
     -- fromJust can be used, because the auth middleware will **always** add
     -- some AuthResult to the vault.
     \req respond -> case fromJust $ Auth.getResult req of
@@ -149,115 +142,33 @@ postgrestResponse appState conf@AppConfig{..} maybeSchemaCache pgVer authResult@
 
   body <- lift $ Wai.strictRequestBody req
 
-  (parseTime, apiRequest) <-
-    calcTiming configServerTimingEnabled $
-      liftEither . mapLeft Error.ApiRequestError $
-        ApiRequest.userApiRequest conf req body sCache
-
   let jwtTime = if configServerTimingEnabled then Auth.getJwtDur req else Nothing
-  handleRequest authResult conf appState (Just authRole /= configDbAnonRole) configDbPreparedStatements pgVer apiRequest sCache jwtTime parseTime observer
 
-runDbHandler :: AppState.AppState -> AppConfig -> SQL.IsolationLevel -> SQL.Mode -> Bool -> Bool -> (Observation -> IO ()) -> DbHandler b -> Handler IO b
-runDbHandler appState config isoLvl mode authenticated prepared observer handler = do
-  dbResp <- lift $ do
-    let transaction = if prepared then SQL.transaction else SQL.unpreparedTransaction
-    AppState.usePool appState config (transaction isoLvl mode $ runExceptT handler) observer
+  (parseTime, apiReq@ApiRequest{..}) <- withTiming $ liftEither . mapLeft Error.ApiRequestError $ ApiRequest.userApiRequest conf req body sCache
+  (planTime, plan)                   <- withTiming $ liftEither $ Plan.actionPlan iAction conf apiReq sCache
+  (queryTime, queryResult)           <- withTiming $ Query.runQuery appState conf authResult apiReq plan sCache pgVer (Just authRole /= configDbAnonRole) observer
+  (respTime, resp)                   <- withTiming $ liftEither $ Response.actionResponse queryResult apiReq (T.decodeUtf8 prettyVersion, docsVersion) conf sCache iSchema iNegotiatedByProfile
 
-  resp <-
-    liftEither . mapLeft Error.PgErr $
-      mapLeft (Error.PgError authenticated) dbResp
+  return $ toWaiResponse (ServerTiming jwtTime parseTime planTime queryTime respTime) resp
 
-  liftEither resp
-
-handleRequest :: AuthResult -> AppConfig -> AppState.AppState -> Bool -> Bool -> PgVersion -> ApiRequest -> SchemaCache ->
-                Maybe Double -> Maybe Double -> (Observation -> IO ()) -> Handler IO Wai.Response
-handleRequest AuthResult{..} conf appState authenticated prepared pgVer apiReq@ApiRequest{..} sCache jwtTime parseTime observer =
-  case (iAction, iTarget) of
-    (ActionRead headersOnly, TargetIdent identifier) -> do
-      (planTime', wrPlan) <- withTiming $ liftEither $ Plan.wrappedReadPlan identifier conf sCache apiReq
-      (txTime', resultSet) <- withTiming $ runQuery roleIsoLvl mempty (Plan.wrTxMode wrPlan) $ Query.readQuery wrPlan conf apiReq
-      (respTime', pgrst) <- withTiming $ liftEither $ Response.readResponse wrPlan headersOnly identifier apiReq resultSet
-      return $ pgrstResponse (ServerTiming jwtTime parseTime planTime' txTime' respTime') pgrst
-
-    (ActionMutate MutationCreate, TargetIdent identifier) -> do
-      (planTime', mrPlan) <- withTiming $ liftEither $ Plan.mutateReadPlan MutationCreate apiReq identifier conf sCache
-      (txTime', resultSet) <- withTiming $ runQuery roleIsoLvl mempty (Plan.mrTxMode mrPlan) $ Query.createQuery mrPlan apiReq conf
-      (respTime', pgrst) <- withTiming $ liftEither $ Response.createResponse identifier mrPlan apiReq resultSet
-      return $ pgrstResponse (ServerTiming jwtTime parseTime planTime' txTime' respTime') pgrst
-
-    (ActionMutate MutationUpdate, TargetIdent identifier) -> do
-      (planTime', mrPlan) <- withTiming $ liftEither $ Plan.mutateReadPlan MutationUpdate apiReq identifier conf sCache
-      (txTime', resultSet) <- withTiming $ runQuery roleIsoLvl mempty (Plan.mrTxMode mrPlan) $ Query.updateQuery mrPlan apiReq conf
-      (respTime', pgrst) <- withTiming $ liftEither $ Response.updateResponse mrPlan apiReq resultSet
-      return $ pgrstResponse (ServerTiming jwtTime parseTime planTime' txTime' respTime') pgrst
-
-    (ActionMutate MutationSingleUpsert, TargetIdent identifier) -> do
-      (planTime', mrPlan) <- withTiming $ liftEither $ Plan.mutateReadPlan MutationSingleUpsert apiReq identifier conf sCache
-      (txTime', resultSet) <- withTiming $ runQuery roleIsoLvl mempty (Plan.mrTxMode mrPlan) $ Query.singleUpsertQuery mrPlan apiReq conf
-      (respTime', pgrst) <- withTiming $ liftEither $ Response.singleUpsertResponse mrPlan apiReq resultSet
-      return $ pgrstResponse (ServerTiming jwtTime parseTime planTime' txTime' respTime') pgrst
-
-    (ActionMutate MutationDelete, TargetIdent identifier) -> do
-      (planTime', mrPlan) <- withTiming $ liftEither $ Plan.mutateReadPlan MutationDelete apiReq identifier conf sCache
-      (txTime', resultSet) <- withTiming $ runQuery roleIsoLvl mempty (Plan.mrTxMode mrPlan) $ Query.deleteQuery mrPlan apiReq conf
-      (respTime', pgrst) <- withTiming $ liftEither $ Response.deleteResponse mrPlan apiReq resultSet
-      return $ pgrstResponse (ServerTiming jwtTime parseTime planTime' txTime' respTime') pgrst
-
-    (ActionInvoke invMethod, TargetProc identifier _) -> do
-      (planTime', cPlan) <- withTiming $ liftEither $ Plan.callReadPlan identifier conf sCache apiReq invMethod
-      (txTime', resultSet) <- withTiming $ runQuery (fromMaybe roleIsoLvl $ pdIsoLvl (Plan.crProc cPlan)) (pdFuncSettings $ Plan.crProc cPlan) (Plan.crTxMode cPlan) $ Query.invokeQuery (Plan.crProc cPlan) cPlan apiReq conf pgVer
-      (respTime', pgrst) <- withTiming $ liftEither $ Response.invokeResponse cPlan invMethod (Plan.crProc cPlan) apiReq resultSet
-      return $ pgrstResponse (ServerTiming jwtTime parseTime planTime' txTime' respTime') pgrst
-
-    (ActionInspect headersOnly, TargetDefaultSpec tSchema) -> do
-      (planTime', iPlan) <- withTiming $ liftEither $ Plan.inspectPlan apiReq
-      (txTime', oaiResult) <- withTiming $ runQuery roleIsoLvl mempty (Plan.ipTxmode iPlan) $ Query.openApiQuery sCache pgVer conf tSchema
-      (respTime', pgrst) <- withTiming $ liftEither $ Response.openApiResponse (T.decodeUtf8 prettyVersion, docsVersion) headersOnly oaiResult conf sCache iSchema iNegotiatedByProfile
-      return $ pgrstResponse (ServerTiming jwtTime parseTime planTime' txTime' respTime') pgrst
-
-    (ActionInfo, TargetIdent identifier) -> do
-      (respTime', pgrst) <- withTiming $ liftEither $ Response.infoIdentResponse identifier sCache
-      return $ pgrstResponse (ServerTiming jwtTime parseTime Nothing Nothing respTime') pgrst
-
-    (ActionInfo, TargetProc identifier _) -> do
-      (planTime', cPlan) <- withTiming $ liftEither $ Plan.callReadPlan identifier conf sCache apiReq ApiRequest.InvHead
-      (respTime', pgrst) <- withTiming $ liftEither $ Response.infoProcResponse (Plan.crProc cPlan)
-      return $ pgrstResponse (ServerTiming jwtTime parseTime planTime' Nothing respTime') pgrst
-
-    (ActionInfo, TargetDefaultSpec _) -> do
-      (respTime', pgrst) <- withTiming $ liftEither Response.infoRootResponse
-      return $ pgrstResponse (ServerTiming jwtTime parseTime Nothing Nothing respTime') pgrst
-
-    _ ->
-      -- This is unreachable as the ApiRequest.hs rejects it before
-      -- TODO Refactor the Action/Target types to remove this line
-      throwError $ Error.ApiRequestError ApiRequestTypes.NotFound
   where
-    roleSettings = fromMaybe mempty (HM.lookup authRole $ configRoleSettings conf)
-    roleIsoLvl = HM.findWithDefault SQL.ReadCommitted authRole $ configRoleIsoLvl conf
-    runQuery isoLvl funcSets mode query =
-      runDbHandler appState conf isoLvl mode authenticated prepared observer $ do
-        Query.setPgLocals conf authClaims authRole (HM.toList roleSettings) funcSets apiReq
-        Query.runPreReq conf
-        query
+    toWaiResponse :: ServerTiming -> Response.PgrstResponse -> Wai.Response
+    toWaiResponse timing (Response.PgrstResponse st hdrs bod) = Wai.responseLBS st (hdrs ++ ([serverTimingHeader timing | configServerTimingEnabled])) bod
 
-    pgrstResponse :: ServerTiming -> Response.PgrstResponse -> Wai.Response
-    pgrstResponse timing (Response.PgrstResponse st hdrs bod) = Wai.responseLBS st (hdrs ++ ([serverTimingHeader timing | configServerTimingEnabled conf])) bod
+    withTiming :: Handler IO a -> Handler IO (Maybe Double, a)
+    withTiming f = if configServerTimingEnabled
+        then do
+          (t, r) <- timeItT f
+          pure (Just t, r)
+        else do
+          r <- f
+          pure (Nothing, r)
 
-    withTiming = calcTiming $ configServerTimingEnabled conf
+traceHeaderMiddleware :: AppState -> Wai.Middleware
+traceHeaderMiddleware appState app req respond = do
+  conf <- AppState.getConfig appState
 
-calcTiming :: Bool -> Handler IO a -> Handler IO (Maybe Double, a)
-calcTiming timingEnabled f = if timingEnabled
-    then do
-      (t, r) <- timeItT f
-      pure (Just t, r)
-    else do
-      r <- f
-      pure (Nothing, r)
-
-traceHeaderMiddleware :: AppConfig -> Wai.Middleware
-traceHeaderMiddleware AppConfig{configServerTraceHeader} app req respond =
-  case configServerTraceHeader of
+  case configServerTraceHeader conf of
     Nothing -> app req respond
     Just hdr ->
       let hdrVal = L.lookup hdr $ Wai.requestHeaders req in
